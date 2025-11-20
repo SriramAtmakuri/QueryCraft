@@ -104,5 +104,50 @@ export const api = {
     }
 
     return response.json();
+  },
+
+  async analyzePerformance(sql: string, schema?: string) {
+    const response = await fetch(`${API_BASE}/api/analyze-performance`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sql, schema })
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || 'Failed to analyze performance');
+    }
+
+    return response.json();
+  },
+
+  async debugSQL(sql: string, error: string, schema?: string) {
+    const response = await fetch(`${API_BASE}/api/debug-sql`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sql, error, schema })
+    });
+
+    if (!response.ok) {
+      const err = await response.json();
+      throw new Error(err.error || 'Failed to debug SQL');
+    }
+
+    return response.json();
+  },
+
+  async generateSchema(description: string) {
+    const response = await fetch(`${API_BASE}/api/generate-schema`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ description })
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || 'Failed to generate schema');
+    }
+
+    return response.json();
   }
 };

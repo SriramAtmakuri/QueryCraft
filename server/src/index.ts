@@ -108,7 +108,22 @@ app.post('/api/explain-sql', async (req, res) => {
                 body: JSON.stringify({
                     contents: [{
                         parts: [{
-                            text: `Explain this SQL query in simple terms. Break down what each part does and what the result will be:\n\n${sql}`
+                            text: `Explain this SQL query in a structured format. Return a JSON object with this structure:
+{
+  "summary": "<one sentence summary of what the query does>",
+  "sections": [
+    {
+      "title": "<section name like 'SELECT Clause', 'FROM Clause', 'WHERE Conditions', 'JOINs', 'GROUP BY', 'ORDER BY', etc>",
+      "explanation": "<clear explanation of this part>",
+      "columns": ["<list of columns involved if applicable>"]
+    }
+  ],
+  "result": "<description of what the result set will contain>",
+  "tips": ["<optional tips or best practices>"]
+}
+
+Query to explain:
+${sql}`
                         }]
                     }],
                     generationConfig: {
@@ -125,8 +140,15 @@ app.post('/api/explain-sql', async (req, res) => {
             return res.status(500).json({ error: data.error.message });
         }
 
-        const explanation = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
-        res.json({ explanation });
+        const resultText = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+        const jsonMatch = resultText.match(/\{[\s\S]*\}/);
+        if (jsonMatch) {
+            const explanation = JSON.parse(jsonMatch[0]);
+            res.json(explanation);
+        } else {
+            // Fallback to plain text
+            res.json({ summary: resultText, sections: [], result: '', tips: [] });
+        }
     } catch (error) {
         console.error('Explain SQL error:', error);
         res.status(500).json({ error: 'Failed to explain SQL' });
@@ -346,6 +368,213 @@ ${sql}`
     } catch (error) {
         console.error('Mock results error:', error);
         res.status(500).json({ error: 'Failed to generate mock results' });
+    }
+});
+
+// Gemini API - Analyze query performance (simulated EXPLAIN ANALYZE)
+app.post('/api/analyze-performance', async (req, res) => {
+    try {
+        const { sql, schema } = req.body;
+
+        if (!sql) {
+            return res.status(400).json({ error: 'SQL query is required' });
+        }
+
+        const apiKey = process.env.GEMINI_API_KEY;
+        if (!apiKey) {
+            return res.status(500).json({ error: 'Gemini API key not configured' });
+        }
+
+        const response = await fetch(
+            `https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key=${apiKey}`,
+            {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    contents: [{
+                        parts: [{
+                            text: `Analyze this SQL query and provide a simulated execution plan analysis. Return a JSON object with this structure:
+{
+  "estimatedCost": <number 1-100>,
+  "estimatedRows": <number>,
+  "executionTime": "<estimated time like '15ms' or '2.3s'>",
+  "operations": [
+    {
+      "type": "<Seq Scan|Index Scan|Hash Join|Nested Loop|Sort|Aggregate|etc>",
+      "table": "<table name or null>",
+      "cost": <number>,
+      "rows": <number>,
+      "description": "<what this operation does>",
+      "warning": "<potential issue or null>"
+    }
+  ],
+  "suggestions": [
+    {
+      "type": "<index|rewrite|statistics>",
+      "priority": "<high|medium|low>",
+      "description": "<suggestion text>",
+      "sql": "<CREATE INDEX or optimized query if applicable>"
+    }
+  ],
+  "summary": "<overall performance assessment>"
+}
+
+${schema ? `Schema:\n${schema}\n\n` : ''}Query:\n${sql}`
+                        }]
+                    }],
+                    generationConfig: {
+                        temperature: 0.3,
+                        maxOutputTokens: 2048
+                    }
+                })
+            }
+        );
+
+        const data = await response.json();
+
+        if (data.error) {
+            return res.status(500).json({ error: data.error.message });
+        }
+
+        const resultText = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+        const jsonMatch = resultText.match(/\{[\s\S]*\}/);
+        if (jsonMatch) {
+            const analysis = JSON.parse(jsonMatch[0]);
+            res.json(analysis);
+        } else {
+            res.status(500).json({ error: 'Failed to parse performance analysis' });
+        }
+    } catch (error) {
+        console.error('Performance analysis error:', error);
+        res.status(500).json({ error: 'Failed to analyze performance' });
+    }
+});
+
+// Gemini API - Debug SQL query errors
+app.post('/api/debug-sql', async (req, res) => {
+    try {
+        const { sql, error: sqlError, schema } = req.body;
+
+        if (!sql || !sqlError) {
+            return res.status(400).json({ error: 'SQL query and error message are required' });
+        }
+
+        const apiKey = process.env.GEMINI_API_KEY;
+        if (!apiKey) {
+            return res.status(500).json({ error: 'Gemini API key not configured' });
+        }
+
+        const response = await fetch(
+            `https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key=${apiKey}`,
+            {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    contents: [{
+                        parts: [{
+                            text: `Debug this SQL query error. Analyze the error, explain what's wrong, and provide the corrected query.
+
+Return a JSON object with this structure:
+{
+  "errorType": "<syntax|type_mismatch|constraint|reference|permission|other>",
+  "explanation": "<clear explanation of what went wrong>",
+  "location": "<specific part of query with the issue>",
+  "fixedQuery": "<corrected SQL query>",
+  "prevention": "<tip to avoid this error in future>"
+}
+
+${schema ? `Schema:\n${schema}\n\n` : ''}Query:\n${sql}
+
+Error Message:\n${sqlError}`
+                        }]
+                    }],
+                    generationConfig: {
+                        temperature: 0.3,
+                        maxOutputTokens: 1024
+                    }
+                })
+            }
+        );
+
+        const data = await response.json();
+
+        if (data.error) {
+            return res.status(500).json({ error: data.error.message });
+        }
+
+        const resultText = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+        const jsonMatch = resultText.match(/\{[\s\S]*\}/);
+        if (jsonMatch) {
+            const debug = JSON.parse(jsonMatch[0]);
+            res.json(debug);
+        } else {
+            res.status(500).json({ error: 'Failed to parse debug response' });
+        }
+    } catch (error) {
+        console.error('Debug SQL error:', error);
+        res.status(500).json({ error: 'Failed to debug SQL' });
+    }
+});
+
+// Gemini API - Generate schema from natural language
+app.post('/api/generate-schema', async (req, res) => {
+    try {
+        const { description } = req.body;
+
+        if (!description) {
+            return res.status(400).json({ error: 'Description is required' });
+        }
+
+        const apiKey = process.env.GEMINI_API_KEY;
+        if (!apiKey) {
+            return res.status(500).json({ error: 'Gemini API key not configured' });
+        }
+
+        const response = await fetch(
+            `https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key=${apiKey}`,
+            {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    contents: [{
+                        parts: [{
+                            text: `Generate a complete PostgreSQL database schema based on this description. Include all necessary tables, relationships, indexes, and constraints.
+
+Return the complete CREATE TABLE statements with:
+- Primary keys
+- Foreign keys with ON DELETE/UPDATE actions
+- Appropriate data types
+- NOT NULL constraints where needed
+- Default values where appropriate
+- Useful indexes for common queries
+- Comments explaining the purpose
+
+Description: ${description}
+
+Return ONLY the SQL statements, no explanations.`
+                        }]
+                    }],
+                    generationConfig: {
+                        temperature: 0.4,
+                        maxOutputTokens: 4096
+                    }
+                })
+            }
+        );
+
+        const data = await response.json();
+
+        if (data.error) {
+            return res.status(500).json({ error: data.error.message });
+        }
+
+        const schema = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+        const cleanSchema = schema.replace(/```sql\n?/gi, '').replace(/```\n?/gi, '').trim();
+
+        res.json({ schema: cleanSchema });
+    } catch (error) {
+        console.error('Generate schema error:', error);
+        res.status(500).json({ error: 'Failed to generate schema' });
     }
 });
 
