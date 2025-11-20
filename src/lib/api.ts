@@ -74,5 +74,35 @@ export const api = {
     }
 
     return response.json();
+  },
+
+  async getMockResults(sql: string) {
+    const response = await fetch(`${API_BASE}/api/mock-results`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sql })
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || 'Failed to generate mock results');
+    }
+
+    return response.json();
+  },
+
+  async exportORM(sql: string, orm: string) {
+    const response = await fetch(`${API_BASE}/api/export-orm`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sql, orm })
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || 'Failed to export to ORM');
+    }
+
+    return response.json();
   }
 };

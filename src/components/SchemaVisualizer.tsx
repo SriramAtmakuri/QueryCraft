@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useMemo, useEffect } from 'react';
 import {
   ReactFlow,
   Node,
@@ -93,7 +93,7 @@ export const SchemaVisualizer = () => {
   const tables = schema.tables.length > 0 ? schema.tables : defaultSchema;
   const relationships = schema.relationships;
 
-  const initialNodes: Node[] = useMemo(() => {
+  const computedNodes: Node[] = useMemo(() => {
     return tables.map((table, idx) => ({
       id: table.name,
       type: 'table',
@@ -102,7 +102,7 @@ export const SchemaVisualizer = () => {
     }));
   }, [tables]);
 
-  const initialEdges: Edge[] = useMemo(() => {
+  const computedEdges: Edge[] = useMemo(() => {
     if (relationships.length > 0) {
       // Use parsed relationships
       return relationships.map((rel, idx) => ({
@@ -142,8 +142,14 @@ export const SchemaVisualizer = () => {
     ];
   }, [relationships]);
 
-  const [nodes, , onNodesChange] = useNodesState(initialNodes);
-  const [edges, , onEdgesChange] = useEdgesState(initialEdges);
+  const [nodes, setNodes, onNodesChange] = useNodesState(computedNodes);
+  const [edges, setEdges, onEdgesChange] = useEdgesState(computedEdges);
+
+  // Update nodes and edges when schema changes
+  useEffect(() => {
+    setNodes(computedNodes);
+    setEdges(computedEdges);
+  }, [computedNodes, computedEdges, setNodes, setEdges]);
 
   return (
     <Card className="h-[600px] overflow-hidden">

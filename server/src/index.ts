@@ -281,6 +281,134 @@ app.post('/api/sql-to-natural', async (req, res) => {
     }
 });
 
+// Gemini API - Generate mock results for SQL query
+app.post('/api/mock-results', async (req, res) => {
+    try {
+        const { sql } = req.body;
+
+        if (!sql) {
+            return res.status(400).json({ error: 'SQL query is required' });
+        }
+
+        const apiKey = process.env.GEMINI_API_KEY;
+        if (!apiKey) {
+            return res.status(500).json({ error: 'Gemini API key not configured' });
+        }
+
+        const response = await fetch(
+            `https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key=${apiKey}`,
+            {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    contents: [{
+                        parts: [{
+                            text: `Generate realistic mock data for this SQL query. Return ONLY a JSON object with this exact structure:
+{
+  "columns": ["column1", "column2", ...],
+  "rows": [
+    ["value1", "value2", ...],
+    ["value1", "value2", ...],
+    ...
+  ]
+}
+
+Generate 5-10 rows of realistic sample data based on the query columns. Use realistic names, emails, dates, numbers etc.
+
+SQL Query:
+${sql}`
+                        }]
+                    }],
+                    generationConfig: {
+                        temperature: 0.7,
+                        maxOutputTokens: 2048
+                    }
+                })
+            }
+        );
+
+        const data = await response.json();
+
+        if (data.error) {
+            return res.status(500).json({ error: data.error.message });
+        }
+
+        const resultText = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+
+        // Extract JSON from response
+        const jsonMatch = resultText.match(/\{[\s\S]*\}/);
+        if (jsonMatch) {
+            const mockData = JSON.parse(jsonMatch[0]);
+            res.json(mockData);
+        } else {
+            res.status(500).json({ error: 'Failed to parse mock results' });
+        }
+    } catch (error) {
+        console.error('Mock results error:', error);
+        res.status(500).json({ error: 'Failed to generate mock results' });
+    }
+});
+
+// Gemini API - Export SQL to ORM code
+app.post('/api/export-orm', async (req, res) => {
+    try {
+        const { sql, orm } = req.body;
+
+        if (!sql || !orm) {
+            return res.status(400).json({ error: 'SQL and ORM type are required' });
+        }
+
+        const apiKey = process.env.GEMINI_API_KEY;
+        if (!apiKey) {
+            return res.status(500).json({ error: 'Gemini API key not configured' });
+        }
+
+        const ormInstructions: Record<string, string> = {
+            prisma: 'Prisma Client query using findMany, create, update, delete, etc.',
+            typeorm: 'TypeORM query using QueryBuilder or Repository methods',
+            sequelize: 'Sequelize query using findAll, create, update, destroy, etc.',
+            drizzle: 'Drizzle ORM query using select, insert, update, delete',
+            knex: 'Knex.js query builder syntax'
+        };
+
+        const response = await fetch(
+            `https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key=${apiKey}`,
+            {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    contents: [{
+                        parts: [{
+                            text: `Convert this SQL query to ${ormInstructions[orm] || orm} code. Return ONLY the code, no explanations. Include necessary imports if applicable.
+
+SQL Query:
+${sql}`
+                        }]
+                    }],
+                    generationConfig: {
+                        temperature: 0.3,
+                        maxOutputTokens: 1024
+                    }
+                })
+            }
+        );
+
+        const data = await response.json();
+
+        if (data.error) {
+            return res.status(500).json({ error: data.error.message });
+        }
+
+        const code = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+        const cleanCode = code.replace(/```\w*\n?/gi, '').replace(/```\n?/gi, '').trim();
+
+        res.json({ code: cleanCode });
+    } catch (error) {
+        console.error('Export ORM error:', error);
+        res.status(500).json({ error: 'Failed to export to ORM' });
+    }
+});
+
 app.listen(PORT, () => {
     console.log(`Server running on http://localhost:${PORT}`);
 });
