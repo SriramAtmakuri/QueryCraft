@@ -1,0 +1,43 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id        String   @id @default(uuid())
+  email     String   @unique
+  name      String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  
+  queries     SavedQuery[]
+  connections DatabaseConnection[]
+}
+
+model SavedQuery {
+  id                  String   @id @default(uuid())
+  name                String
+  sqlQuery            String
+  visualizationConfig String?  // JSON string for chart config
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+  
+  userId String
+  user   User   @relation(fields: [userId], references: [id])
+}
+
+model DatabaseConnection {
+  id               String   @id @default(uuid())
+  name             String
+  type             String   // e.g., "postgres", "mysql", "sqlite"
+  connectionString String
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+  
+  userId String
+  user   User   @relation(fields: [userId], references: [id])
+}
