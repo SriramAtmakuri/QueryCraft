@@ -13,21 +13,41 @@ import {
 import '@xyflow/react/dist/style.css';
 import { Card } from '@/components/ui/card';
 import { Database, Key, Link } from 'lucide-react';
+import { useSchema } from '@/context/SchemaContext';
+import { TableSchema } from '@/lib/sqlParser';
 
-interface TableColumn {
-  name: string;
-  type: string;
-  isPrimaryKey?: boolean;
-  isForeignKey?: boolean;
-}
+const TableNode = ({ data }: { data: Record<string, unknown> }) => {
+  const tableData = data as unknown as TableSchema;
 
-interface TableSchema {
-  name: string;
-  columns: TableColumn[];
-}
+  return (
+    <div className="bg-card border border-border rounded-lg shadow-lg min-w-[250px]">
+      <div className="bg-primary/10 border-b border-border px-4 py-3 rounded-t-lg flex items-center gap-2">
+        <Database className="w-4 h-4 text-primary" />
+        <span className="font-semibold text-sm">{tableData.name}</span>
+      </div>
+      <div className="p-2">
+        {tableData.columns.map((col, idx) => (
+          <div
+            key={idx}
+            className="flex items-center gap-2 px-2 py-1.5 text-xs hover:bg-muted/50 rounded"
+          >
+            {col.isPrimaryKey && <Key className="w-3 h-3 text-primary" />}
+            {col.isForeignKey && <Link className="w-3 h-3 text-accent" />}
+            <span className="flex-1 font-mono">{col.name}</span>
+            <span className="text-muted-foreground">{col.type}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+};
 
-// Mock schema data - will be replaced with actual schema parsing
-const mockSchema: TableSchema[] = [
+const nodeTypes = {
+  table: TableNode,
+};
+
+// Default schema for when no schema is loaded
+const defaultSchema: TableSchema[] = [
   {
     name: 'users',
     columns: [
@@ -66,54 +86,42 @@ const mockSchema: TableSchema[] = [
   },
 ];
 
-const TableNode = ({ data }: { data: Record<string, unknown> }) => {
-  const tableData = data as unknown as TableSchema;
-  
-  return (
-    <div className="bg-card border border-border rounded-lg shadow-lg min-w-[250px]">
-      <div className="bg-primary/10 border-b border-border px-4 py-3 rounded-t-lg flex items-center gap-2">
-        <Database className="w-4 h-4 text-primary" />
-        <span className="font-semibold text-sm">{tableData.name}</span>
-      </div>
-      <div className="p-2">
-        {tableData.columns.map((col, idx) => (
-          <div
-            key={idx}
-            className="flex items-center gap-2 px-2 py-1.5 text-xs hover:bg-muted/50 rounded"
-          >
-            {col.isPrimaryKey && <Key className="w-3 h-3 text-primary" />}
-            {col.isForeignKey && <Link className="w-3 h-3 text-accent" />}
-            <span className="flex-1 font-mono">{col.name}</span>
-            <span className="text-muted-foreground">{col.type}</span>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-};
-
-const nodeTypes = {
-  table: TableNode,
-};
-
 export const SchemaVisualizer = () => {
+  const { schema } = useSchema();
+
+  // Use parsed schema if available, otherwise use default
+  const tables = schema.tables.length > 0 ? schema.tables : defaultSchema;
+  const relationships = schema.relationships;
+
   const initialNodes: Node[] = useMemo(() => {
-    return mockSchema.map((table, idx) => ({
+    return tables.map((table, idx) => ({
       id: table.name,
       type: 'table',
       position: { x: (idx % 2) * 350 + 50, y: Math.floor(idx / 2) * 250 + 50 },
       data: { ...table } as Record<string, unknown>,
     }));
-  }, []);
+  }, [tables]);
 
   const initialEdges: Edge[] = useMemo(() => {
+    if (relationships.length > 0) {
+      // Use parsed relationships
+      return relationships.map((rel, idx) => ({
+        id: `${rel.fromTable}-${rel.toTable}-${idx}`,
+        source: rel.toTable,
+        target: rel.fromTable,
+        markerEnd: { type: MarkerType.ArrowClosed, color: 'hsl(var(--primary))' },
+        style: { stroke: 'hsl(var(--primary))' },
+        label: `${rel.fromColumn} → ${rel.toColumn}`,
+        labelStyle: { fontSize: 10, fill: 'hsl(var(--muted-foreground))' },
+      }));
+    }
+
+    // Default relationships for demo
     return [
       {
         id: 'users-orders',
         source: 'users',
         target: 'orders',
-        sourceHandle: 'id',
-        targetHandle: 'user_id',
         markerEnd: { type: MarkerType.ArrowClosed, color: 'hsl(var(--primary))' },
         style: { stroke: 'hsl(var(--primary))' },
       },
@@ -132,7 +140,7 @@ export const SchemaVisualizer = () => {
         style: { stroke: 'hsl(var(--primary))' },
       },
     ];
-  }, []);
+  }, [relationships]);
 
   const [nodes, , onNodesChange] = useNodesState(initialNodes);
   const [edges, , onEdgesChange] = useEdgesState(initialEdges);
@@ -153,7 +161,7 @@ export const SchemaVisualizer = () => {
         <Controls className="bg-card border border-border rounded-lg" />
         <MiniMap
           className="bg-card border border-border rounded-lg"
-          nodeColor={(node) => 'hsl(var(--primary))'}
+          nodeColor={() => 'hsl(var(--primary))'}
           maskColor="hsl(var(--background) / 0.8)"
         />
       </ReactFlow>

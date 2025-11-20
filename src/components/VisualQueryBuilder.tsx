@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useState, useEffect } from 'react';
 import {
   ReactFlow,
   Node,
@@ -18,13 +18,16 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Table, Filter, Plus, Trash2, Link as LinkIcon } from 'lucide-react';
+import { Table, Filter, Trash2, Copy, GitBranch } from 'lucide-react';
+import { toast } from 'sonner';
+import { useSchema } from '@/context/SchemaContext';
 
 interface TableNodeData {
   label: string;
   columns: string[];
   selectedColumns: string[];
   onColumnToggle: (column: string) => void;
+  onLabelChange: (label: string) => void;
 }
 
 interface FilterNodeData {
@@ -34,18 +37,50 @@ interface FilterNodeData {
   onUpdate: (field: string, value: string) => void;
 }
 
-const TableNode = ({ data }: { data: Record<string, unknown> }) => {
+interface JoinNodeData {
+  leftTable: string;
+  leftColumn: string;
+  rightTable: string;
+  rightColumn: string;
+  joinType: string;
+  onUpdate: (field: string, value: string) => void;
+}
+
+const TableNode = ({ data, id }: { data: Record<string, unknown>; id: string }) => {
   const nodeData = data as unknown as TableNodeData;
-  
+  const { schema } = useSchema();
+
+  // Get available tables from schema
+  const availableTables = schema.tables.length > 0
+    ? schema.tables.map(t => t.name)
+    : ['users', 'orders', 'products', 'order_items'];
+
+  // Get columns for selected table
+  const tableSchema = schema.tables.find(t => t.name === nodeData.label);
+  const columns = tableSchema
+    ? tableSchema.columns.map(c => c.name)
+    : nodeData.columns;
+
   return (
     <div className="bg-card border-2 border-primary rounded-lg shadow-lg min-w-[200px]">
       <Handle type="target" position={Position.Top} className="w-3 h-3" />
-      <div className="bg-primary/10 border-b border-border px-3 py-2 rounded-t-lg flex items-center gap-2">
-        <Table className="w-4 h-4 text-primary" />
-        <span className="font-semibold text-sm">{nodeData.label}</span>
+      <div className="bg-primary/10 border-b border-border px-3 py-2 rounded-t-lg">
+        <Select value={nodeData.label} onValueChange={nodeData.onLabelChange}>
+          <SelectTrigger className="h-7 text-xs border-0 bg-transparent p-0">
+            <div className="flex items-center gap-2">
+              <Table className="w-4 h-4 text-primary" />
+              <SelectValue />
+            </div>
+          </SelectTrigger>
+          <SelectContent>
+            {availableTables.map(table => (
+              <SelectItem key={table} value={table}>{table}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
       </div>
-      <div className="p-3 space-y-1">
-        {nodeData.columns.map((col) => (
+      <div className="p-3 space-y-1 max-h-[200px] overflow-y-auto">
+        {columns.map((col) => (
           <label key={col} className="flex items-center gap-2 cursor-pointer hover:bg-muted/50 px-2 py-1 rounded">
             <input
               type="checkbox"
@@ -64,7 +99,7 @@ const TableNode = ({ data }: { data: Record<string, unknown> }) => {
 
 const FilterNode = ({ data }: { data: Record<string, unknown> }) => {
   const nodeData = data as unknown as FilterNodeData;
-  
+
   return (
     <div className="bg-card border-2 border-accent rounded-lg shadow-lg min-w-[250px]">
       <Handle type="target" position={Position.Top} className="w-3 h-3" />
@@ -88,8 +123,12 @@ const FilterNode = ({ data }: { data: Record<string, unknown> }) => {
             <SelectItem value="!=">!=</SelectItem>
             <SelectItem value=">">{">"}</SelectItem>
             <SelectItem value="<">{"<"}</SelectItem>
+            <SelectItem value=">=">{"≥"}</SelectItem>
+            <SelectItem value="<=">{"≤"}</SelectItem>
             <SelectItem value="LIKE">LIKE</SelectItem>
             <SelectItem value="IN">IN</SelectItem>
+            <SelectItem value="IS NULL">IS NULL</SelectItem>
+            <SelectItem value="IS NOT NULL">IS NOT NULL</SelectItem>
           </SelectContent>
         </Select>
         <Input
@@ -104,34 +143,103 @@ const FilterNode = ({ data }: { data: Record<string, unknown> }) => {
   );
 };
 
+const JoinNode = ({ data }: { data: Record<string, unknown> }) => {
+  const nodeData = data as unknown as JoinNodeData;
+
+  return (
+    <div className="bg-card border-2 border-green-500 rounded-lg shadow-lg min-w-[280px]">
+      <Handle type="target" position={Position.Top} className="w-3 h-3" />
+      <div className="bg-green-500/10 border-b border-border px-3 py-2 rounded-t-lg flex items-center gap-2">
+        <GitBranch className="w-4 h-4 text-green-500" />
+        <span className="font-semibold text-sm">Join</span>
+      </div>
+      <div className="p-3 space-y-2">
+        <Select value={nodeData.joinType} onValueChange={(v) => nodeData.onUpdate('joinType', v)}>
+          <SelectTrigger className="h-8 text-xs">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="INNER JOIN">INNER JOIN</SelectItem>
+            <SelectItem value="LEFT JOIN">LEFT JOIN</SelectItem>
+            <SelectItem value="RIGHT JOIN">RIGHT JOIN</SelectItem>
+            <SelectItem value="FULL JOIN">FULL JOIN</SelectItem>
+          </SelectContent>
+        </Select>
+        <div className="grid grid-cols-2 gap-2">
+          <Input
+            placeholder="Left table"
+            value={nodeData.leftTable}
+            onChange={(e) => nodeData.onUpdate('leftTable', e.target.value)}
+            className="h-8 text-xs"
+          />
+          <Input
+            placeholder="Left column"
+            value={nodeData.leftColumn}
+            onChange={(e) => nodeData.onUpdate('leftColumn', e.target.value)}
+            className="h-8 text-xs"
+          />
+        </div>
+        <div className="grid grid-cols-2 gap-2">
+          <Input
+            placeholder="Right table"
+            value={nodeData.rightTable}
+            onChange={(e) => nodeData.onUpdate('rightTable', e.target.value)}
+            className="h-8 text-xs"
+          />
+          <Input
+            placeholder="Right column"
+            value={nodeData.rightColumn}
+            onChange={(e) => nodeData.onUpdate('rightColumn', e.target.value)}
+            className="h-8 text-xs"
+          />
+        </div>
+      </div>
+      <Handle type="source" position={Position.Bottom} className="w-3 h-3" />
+    </div>
+  );
+};
+
 const nodeTypes = {
   tableNode: TableNode,
   filterNode: FilterNode,
+  joinNode: JoinNode,
 };
 
 export const VisualQueryBuilder = () => {
   const [nodes, setNodes, onNodesChange] = useNodesState([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState([]);
   const [nodeId, setNodeId] = useState(0);
+  const [generatedSQL, setGeneratedSQL] = useState('');
+  const { schema } = useSchema();
 
   const onConnect = useCallback(
     (params: Connection) => setEdges((eds) => addEdge(params, eds)),
     [setEdges]
   );
 
+  // Get default columns based on schema
+  const getDefaultColumns = (tableName: string) => {
+    const table = schema.tables.find(t => t.name === tableName);
+    return table ? table.columns.map(c => c.name) : ['id', 'name', 'email', 'created_at'];
+  };
+
   const addTableNode = () => {
+    const defaultTable = schema.tables.length > 0 ? schema.tables[0].name : 'users';
+    const columns = getDefaultColumns(defaultTable);
+    const currentNodeId = nodeId;
+
     const newNode: Node = {
-      id: `table-${nodeId}`,
+      id: `table-${currentNodeId}`,
       type: 'tableNode',
       position: { x: 100 + nodeId * 50, y: 100 + nodeId * 50 },
       data: {
-        label: 'users',
-        columns: ['id', 'name', 'email', 'created_at'],
-        selectedColumns: ['id', 'name'],
+        label: defaultTable,
+        columns: columns,
+        selectedColumns: columns.slice(0, 2),
         onColumnToggle: (column: string) => {
           setNodes((nds) =>
             nds.map((node) => {
-              if (node.id === `table-${nodeId}`) {
+              if (node.id === `table-${currentNodeId}`) {
                 const selected = (node.data as any).selectedColumns as string[];
                 return {
                   ...node,
@@ -147,6 +255,25 @@ export const VisualQueryBuilder = () => {
             })
           );
         },
+        onLabelChange: (label: string) => {
+          const newColumns = getDefaultColumns(label);
+          setNodes((nds) =>
+            nds.map((node) => {
+              if (node.id === `table-${currentNodeId}`) {
+                return {
+                  ...node,
+                  data: {
+                    ...node.data,
+                    label,
+                    columns: newColumns,
+                    selectedColumns: newColumns.slice(0, 2),
+                  },
+                };
+              }
+              return node;
+            })
+          );
+        },
       } as Record<string, unknown>,
     };
     setNodes((nds) => [...nds, newNode]);
@@ -154,18 +281,52 @@ export const VisualQueryBuilder = () => {
   };
 
   const addFilterNode = () => {
+    const currentNodeId = nodeId;
+
     const newNode: Node = {
-      id: `filter-${nodeId}`,
+      id: `filter-${currentNodeId}`,
       type: 'filterNode',
       position: { x: 400 + nodeId * 50, y: 100 + nodeId * 50 },
       data: {
-        column: 'created_at',
-        operator: '>',
-        value: '2024-01-01',
+        column: '',
+        operator: '=',
+        value: '',
         onUpdate: (field: string, value: string) => {
           setNodes((nds) =>
             nds.map((node) => {
-              if (node.id === `filter-${nodeId}`) {
+              if (node.id === `filter-${currentNodeId}`) {
+                return {
+                  ...node,
+                  data: { ...node.data, [field]: value },
+                };
+              }
+              return node;
+            })
+          );
+        },
+      } as Record<string, unknown>,
+    };
+    setNodes((nds) => [...nds, newNode]);
+    setNodeId((id) => id + 1);
+  };
+
+  const addJoinNode = () => {
+    const currentNodeId = nodeId;
+
+    const newNode: Node = {
+      id: `join-${currentNodeId}`,
+      type: 'joinNode',
+      position: { x: 250 + nodeId * 50, y: 200 + nodeId * 50 },
+      data: {
+        leftTable: '',
+        leftColumn: '',
+        rightTable: '',
+        rightColumn: '',
+        joinType: 'INNER JOIN',
+        onUpdate: (field: string, value: string) => {
+          setNodes((nds) =>
+            nds.map((node) => {
+              if (node.id === `join-${currentNodeId}`) {
                 return {
                   ...node,
                   data: { ...node.data, [field]: value },
@@ -185,39 +346,76 @@ export const VisualQueryBuilder = () => {
     setNodes([]);
     setEdges([]);
     setNodeId(0);
+    setGeneratedSQL('');
   };
 
-  const generateSQL = () => {
-    // Basic SQL generation logic - will be enhanced
+  const generateSQL = useCallback(() => {
     const tableNodes = nodes.filter((n) => n.type === 'tableNode');
     const filterNodes = nodes.filter((n) => n.type === 'filterNode');
+    const joinNodes = nodes.filter((n) => n.type === 'joinNode');
 
-    if (tableNodes.length === 0) return 'SELECT * FROM table_name;';
+    if (tableNodes.length === 0) return '';
 
+    // Collect selected columns
     const selectedColumns = tableNodes.flatMap((n) => {
       const data = n.data as any;
       return (data.selectedColumns as string[]).map(col => `${data.label}.${col}`);
     });
-    
-    const from = tableNodes.map((n) => (n.data as any).label).join(', ');
-    
-    const where = filterNodes
+
+    if (selectedColumns.length === 0) return '';
+
+    // Build FROM clause
+    const tables = tableNodes.map((n) => (n.data as any).label);
+    let fromClause = tables[0];
+
+    // Add JOINs
+    joinNodes.forEach((n) => {
+      const data = n.data as any;
+      if (data.leftTable && data.rightTable && data.leftColumn && data.rightColumn) {
+        fromClause += `\n${data.joinType} ${data.rightTable} ON ${data.leftTable}.${data.leftColumn} = ${data.rightTable}.${data.rightColumn}`;
+      }
+    });
+
+    // Build WHERE clause
+    const conditions = filterNodes
       .map((n) => {
         const data = n.data as any;
-        return `${data.column} ${data.operator} '${data.value}'`;
-      })
-      .join(' AND ');
+        if (!data.column) return null;
 
-    let sql = `SELECT ${selectedColumns.join(', ')}\nFROM ${from}`;
-    if (where) sql += `\nWHERE ${where}`;
+        if (data.operator === 'IS NULL' || data.operator === 'IS NOT NULL') {
+          return `${data.column} ${data.operator}`;
+        }
+
+        const value = isNaN(Number(data.value)) ? `'${data.value}'` : data.value;
+        return `${data.column} ${data.operator} ${value}`;
+      })
+      .filter(Boolean);
+
+    let sql = `SELECT ${selectedColumns.join(', ')}\nFROM ${fromClause}`;
+    if (conditions.length > 0) {
+      sql += `\nWHERE ${conditions.join('\n  AND ')}`;
+    }
     sql += ';';
 
     return sql;
+  }, [nodes]);
+
+  // Real-time SQL generation
+  useEffect(() => {
+    const sql = generateSQL();
+    setGeneratedSQL(sql);
+  }, [generateSQL, nodes]);
+
+  const handleCopy = () => {
+    if (generatedSQL) {
+      navigator.clipboard.writeText(generatedSQL);
+      toast.success('SQL copied to clipboard');
+    }
   };
 
   return (
     <div className="space-y-4">
-      <div className="flex gap-2">
+      <div className="flex gap-2 flex-wrap">
         <Button onClick={addTableNode} size="sm" variant="outline">
           <Table className="w-4 h-4 mr-2" />
           Add Table
@@ -226,12 +424,17 @@ export const VisualQueryBuilder = () => {
           <Filter className="w-4 h-4 mr-2" />
           Add Filter
         </Button>
+        <Button onClick={addJoinNode} size="sm" variant="outline">
+          <GitBranch className="w-4 h-4 mr-2" />
+          Add Join
+        </Button>
         <Button onClick={clearCanvas} size="sm" variant="ghost">
           <Trash2 className="w-4 h-4 mr-2" />
           Clear
         </Button>
-        <Button onClick={() => console.log(generateSQL())} size="sm" className="ml-auto">
-          Generate SQL
+        <Button onClick={handleCopy} size="sm" className="ml-auto" disabled={!generatedSQL}>
+          <Copy className="w-4 h-4 mr-2" />
+          Copy SQL
         </Button>
       </div>
 
@@ -252,11 +455,14 @@ export const VisualQueryBuilder = () => {
         </ReactFlow>
       </Card>
 
-      {nodes.length > 0 && (
+      {generatedSQL && (
         <Card className="p-4">
-          <Label className="text-sm font-semibold mb-2 block">Generated SQL</Label>
+          <div className="flex items-center justify-between mb-2">
+            <Label className="text-sm font-semibold">Generated SQL (Real-time)</Label>
+            <span className="text-xs text-muted-foreground">Updates automatically as you build</span>
+          </div>
           <pre className="code-bg rounded p-3 text-xs font-mono overflow-auto">
-            <code>{generateSQL()}</code>
+            <code>{generatedSQL}</code>
           </pre>
         </Card>
       )}

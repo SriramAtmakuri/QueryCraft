@@ -1,12 +1,15 @@
 import { Button } from "@/components/ui/button";
 import { ArrowRight, Database, Sparkles, Code2, Zap, FileCode } from "lucide-react";
 import { useNavigate } from "react-router-dom";
+import { Header } from "@/components/Header";
 
 const Index = () => {
   const navigate = useNavigate();
 
   return (
     <div className="min-h-screen bg-background">
+      <Header />
+
       {/* Hero Section */}
       <div className="container mx-auto px-4 py-20">
         <div className="text-center space-y-6 max-w-4xl mx-auto">
@@ -14,18 +17,18 @@ const Index = () => {
             <Sparkles className="w-4 h-4 text-primary" />
             <span className="text-sm text-primary">AI-Powered Query Builder</span>
           </div>
-          
+
           <h1 className="text-5xl md:text-7xl font-bold tracking-tight">
             QueryCraft
           </h1>
-          
+
           <p className="text-xl md:text-2xl text-muted-foreground max-w-2xl mx-auto">
             Transform natural language into optimized SQL queries with AI-powered visual builder
           </p>
-          
+
           <div className="flex gap-4 justify-center pt-4">
-            <Button 
-              size="lg" 
+            <Button
+              size="lg"
               onClick={() => navigate('/builder')}
               className="gap-2"
             >

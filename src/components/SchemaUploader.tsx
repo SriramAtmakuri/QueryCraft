@@ -5,25 +5,50 @@ import { Textarea } from '@/components/ui/textarea';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Upload, Database, FileText } from 'lucide-react';
 import { toast } from 'sonner';
+import { parseSQLSchema, parseJSONSchema } from '@/lib/sqlParser';
+import { useSchema } from '@/context/SchemaContext';
 
 export const SchemaUploader = () => {
   const [sqlSchema, setSqlSchema] = useState('');
   const [jsonSchema, setJsonSchema] = useState('');
+  const { setSchema, setSchemaText } = useSchema();
 
   const handleSQLParse = () => {
     if (!sqlSchema.trim()) {
       toast.error('Please enter a SQL schema');
       return;
     }
-    toast.success('Schema parsed successfully!');
-    // Schema parsing logic will be added
+
+    const result = parseSQLSchema(sqlSchema);
+
+    if (result.tables.length === 0) {
+      toast.error('No tables found in schema. Make sure to use CREATE TABLE statements.');
+      return;
+    }
+
+    setSchema(result);
+    setSchemaText(sqlSchema);
+    toast.success(`Parsed ${result.tables.length} tables successfully!`);
   };
 
   const handleJSONParse = () => {
+    if (!jsonSchema.trim()) {
+      toast.error('Please enter a JSON schema');
+      return;
+    }
+
     try {
       JSON.parse(jsonSchema);
-      toast.success('JSON schema parsed successfully!');
-      // Schema parsing logic will be added
+      const result = parseJSONSchema(jsonSchema);
+
+      if (result.tables.length === 0) {
+        toast.error('No tables found in JSON schema');
+        return;
+      }
+
+      setSchema(result);
+      setSchemaText(jsonSchema);
+      toast.success(`Parsed ${result.tables.length} tables successfully!`);
     } catch (e) {
       toast.error('Invalid JSON format');
     }
