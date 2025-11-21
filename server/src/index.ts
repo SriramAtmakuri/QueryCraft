@@ -2,8 +2,17 @@ import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import { PrismaClient } from '@prisma/client';
+import { generateContent, extractJSON, extractJSONObject, extractJSONArray, getAvailableProvider } from './aiProvider';
 
 dotenv.config();
+
+// Log which AI provider is being used
+const provider = getAvailableProvider();
+if (provider) {
+  console.log(`Using AI provider: ${provider.provider.toUpperCase()}`);
+} else {
+  console.warn('WARNING: No AI API key configured!');
+}
 
 const app = express();
 const prisma = new PrismaClient();
@@ -15,6 +24,45 @@ app.use(express.json());
 // Health Check
 app.get('/api/health', (req, res) => {
     res.json({ status: 'ok', timestamp: new Date().toISOString() });
+});
+
+// AI Provider Status - Check which provider is configured and test it
+app.get('/api/ai-status', async (req, res) => {
+    const providerConfig = getAvailableProvider();
+
+    if (!providerConfig) {
+        return res.json({
+            configured: false,
+            provider: null,
+            status: 'error',
+            message: 'No AI API key configured. Set GEMINI_API_KEY, OPENAI_API_KEY, ANTHROPIC_API_KEY, or GROQ_API_KEY'
+        });
+    }
+
+    try {
+        // Test the API with a simple request
+        const result = await generateContent({
+            prompt: 'Reply with exactly: OK',
+            temperature: 0,
+            maxTokens: 10
+        });
+
+        res.json({
+            configured: true,
+            provider: providerConfig.provider,
+            status: 'working',
+            message: `${providerConfig.provider.toUpperCase()} API is working correctly`,
+            testResponse: result.text.substring(0, 50)
+        });
+    } catch (error: any) {
+        res.json({
+            configured: true,
+            provider: providerConfig.provider,
+            status: 'error',
+            message: error.message || 'API key validation failed',
+            hint: 'Check if your API key is valid and has sufficient quota'
+        });
+    }
 });
 
 // Basic User Routes
@@ -108,27 +156,32 @@ app.post('/api/explain-sql', async (req, res) => {
                 body: JSON.stringify({
                     contents: [{
                         parts: [{
-                            text: `Explain this SQL query in a structured format. Return a JSON object with this structure:
+                            text: `Analyze and explain this SQL query in detail. Return ONLY a raw JSON object (no markdown, no code blocks) with this exact structure:
 {
-  "summary": "<one sentence summary of what the query does>",
+  "summary": "<one clear sentence describing what this query accomplishes>",
   "sections": [
     {
-      "title": "<section name like 'SELECT Clause', 'FROM Clause', 'WHERE Conditions', 'JOINs', 'GROUP BY', 'ORDER BY', etc>",
-      "explanation": "<clear explanation of this part>",
-      "columns": ["<list of columns involved if applicable>"]
+      "title": "<section name: SELECT Clause, FROM Clause, WHERE Conditions, JOINs, Subqueries, GROUP BY, ORDER BY, etc>",
+      "explanation": "<detailed explanation of what this part does and why>",
+      "columns": ["<columns involved, empty array if not applicable>"]
     }
   ],
-  "result": "<description of what the result set will contain>",
-  "tips": ["<optional tips or best practices>"]
+  "result": "<describe the expected output: what rows/columns will be returned>",
+  "tips": ["<helpful tips about performance, best practices, or potential issues>"]
 }
 
-Query to explain:
+IMPORTANT:
+- Return ONLY the JSON object, no markdown code blocks
+- Always include at least 2-3 sections breaking down the query
+- Provide meaningful explanations that help someone understand the query logic
+
+SQL Query to explain:
 ${sql}`
                         }]
                     }],
                     generationConfig: {
-                        temperature: 0.5,
-                        maxOutputTokens: 1024
+                        temperature: 0.3,
+                        maxOutputTokens: 2048
                     }
                 })
             }
@@ -141,13 +194,35 @@ ${sql}`
         }
 
         const resultText = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
-        const jsonMatch = resultText.match(/\{[\s\S]*\}/);
+        // Remove markdown code blocks if present
+        const cleanedText = resultText.replace(/```json\s*/gi, '').replace(/```\s*/g, '').trim();
+        const jsonMatch = cleanedText.match(/\{[\s\S]*\}/);
         if (jsonMatch) {
-            const explanation = JSON.parse(jsonMatch[0]);
-            res.json(explanation);
+            try {
+                // Try to fix common JSON issues
+                let jsonStr = jsonMatch[0]
+                    .replace(/,\s*}/g, '}')  // Remove trailing commas before }
+                    .replace(/,\s*]/g, ']')  // Remove trailing commas before ]
+                    .replace(/\n/g, ' ');    // Remove newlines inside strings
+                const explanation = JSON.parse(jsonStr);
+                res.json(explanation);
+            } catch (parseError) {
+                console.error('JSON parse error:', parseError);
+                res.json({
+                    summary: resultText.substring(0, 500),
+                    sections: [],
+                    result: '',
+                    tips: ['Could not parse explanation details']
+                });
+            }
         } else {
             // Fallback to plain text
-            res.json({ summary: resultText, sections: [], result: '', tips: [] });
+            res.json({
+                summary: resultText.substring(0, 500),
+                sections: [],
+                result: '',
+                tips: []
+            });
         }
     } catch (error) {
         console.error('Explain SQL error:', error);
@@ -226,10 +301,32 @@ app.post('/api/optimize-sql', async (req, res) => {
                 body: JSON.stringify({
                     contents: [{
                         parts: [{
-                            text: `Analyze and optimize this SQL query. Provide:
-1. The optimized query
-2. List of suggested indexes
-3. Performance tips
+                            text: `Analyze and optimize this SQL query for better performance. Return ONLY a raw JSON object (no markdown, no code blocks) with this structure:
+{
+  "optimizedQuery": "<the actual optimized SQL query code - must be valid SQL, not a description>",
+  "improvements": [
+    {
+      "type": "<index|rewrite|hint|structure>",
+      "description": "<what was improved>",
+      "impact": "<high|medium|low>"
+    }
+  ],
+  "indexes": [
+    {
+      "table": "<table name>",
+      "columns": ["<column names>"],
+      "sql": "<CREATE INDEX statement>",
+      "reason": "<why this index helps>"
+    }
+  ],
+  "tips": ["<performance tips>"],
+  "summary": "<brief overall optimization summary>"
+}
+
+IMPORTANT:
+- Return ONLY the JSON object, no markdown code blocks
+- The "optimizedQuery" field MUST contain actual SQL code (SELECT, UPDATE, etc.), NOT a description or explanation
+- If the query is already optimal, return the same query with minor formatting improvements
 
 ${schema ? `Schema:\n${schema}\n\n` : ''}Query:\n${sql}`
                         }]
@@ -248,8 +345,43 @@ ${schema ? `Schema:\n${schema}\n\n` : ''}Query:\n${sql}`
             return res.status(500).json({ error: data.error.message });
         }
 
-        const optimization = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
-        res.json({ optimization });
+        const resultText = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+        // Remove markdown code blocks if present
+        const cleanedText = resultText.replace(/```json\s*/gi, '').replace(/```\s*/g, '').trim();
+        const jsonMatch = cleanedText.match(/\{[\s\S]*\}/);
+        if (jsonMatch) {
+            try {
+                // Try to fix common JSON issues
+                let jsonStr = jsonMatch[0]
+                    .replace(/,\s*}/g, '}')  // Remove trailing commas before }
+                    .replace(/,\s*]/g, ']'); // Remove trailing commas before ]
+                const optimization = JSON.parse(jsonStr);
+                res.json(optimization);
+            } catch (parseError) {
+                console.error('JSON parse error:', parseError);
+                // Try to extract optimized query from raw text
+                const sqlMatch = resultText.match(/```sql\s*([\s\S]*?)```/i) ||
+                                 resultText.match(/SELECT[\s\S]*?(?:;|$)/i);
+                res.json({
+                    optimizedQuery: sqlMatch ? sqlMatch[1] || sqlMatch[0] : '',
+                    improvements: [],
+                    indexes: [],
+                    tips: ['Could not parse optimization details'],
+                    summary: 'Optimization analysis completed with parsing issues'
+                });
+            }
+        } else {
+            // Fallback - try to extract SQL directly
+            const sqlMatch = resultText.match(/```sql\s*([\s\S]*?)```/i) ||
+                             resultText.match(/SELECT[\s\S]*?(?:;|$)/i);
+            res.json({
+                optimizedQuery: sqlMatch ? sqlMatch[1] || sqlMatch[0] : '',
+                improvements: [],
+                indexes: [],
+                tips: [resultText.substring(0, 200)],
+                summary: ''
+            });
+        }
     } catch (error) {
         console.error('Optimize SQL error:', error);
         res.status(500).json({ error: 'Failed to optimize SQL' });
@@ -635,6 +767,256 @@ ${sql}`
     } catch (error) {
         console.error('Export ORM error:', error);
         res.status(500).json({ error: 'Failed to export to ORM' });
+    }
+});
+
+// Gemini API - Extract schema from image (ERD diagram)
+app.post('/api/image-to-schema', async (req, res) => {
+    try {
+        const { image } = req.body; // Base64 encoded image
+
+        if (!image) {
+            return res.status(400).json({ error: 'Image data is required' });
+        }
+
+        const apiKey = process.env.GEMINI_API_KEY;
+        if (!apiKey) {
+            return res.status(500).json({ error: 'Gemini API key not configured' });
+        }
+
+        // Extract base64 data and mime type
+        const matches = image.match(/^data:(.+);base64,(.+)$/);
+        if (!matches) {
+            return res.status(400).json({ error: 'Invalid image format' });
+        }
+
+        const mimeType = matches[1];
+        const base64Data = matches[2];
+
+        const response = await fetch(
+            `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`,
+            {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    contents: [{
+                        parts: [
+                            {
+                                inlineData: {
+                                    mimeType: mimeType,
+                                    data: base64Data
+                                }
+                            },
+                            {
+                                text: `Analyze this database diagram/ERD image and extract the schema. Generate complete PostgreSQL CREATE TABLE statements.
+
+For each table you see:
+1. Extract table name
+2. Extract all columns with their data types
+3. Identify primary keys
+4. Identify foreign keys and relationships
+5. Add appropriate constraints (NOT NULL, UNIQUE, etc.)
+
+Return ONLY the SQL CREATE TABLE statements, no explanations. Include:
+- Primary keys
+- Foreign keys with ON DELETE/UPDATE actions
+- Appropriate PostgreSQL data types
+- NOT NULL constraints where visible
+- Indexes for foreign keys
+
+If the image is not a database diagram, return an error message.`
+                            }
+                        ]
+                    }],
+                    generationConfig: {
+                        temperature: 0.3,
+                        maxOutputTokens: 4096
+                    }
+                })
+            }
+        );
+
+        const data = await response.json();
+
+        if (data.error) {
+            return res.status(500).json({ error: data.error.message });
+        }
+
+        const schema = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+        const cleanSchema = schema.replace(/```sql\n?/gi, '').replace(/```\n?/gi, '').trim();
+
+        if (!cleanSchema || cleanSchema.toLowerCase().includes('not a database') || cleanSchema.toLowerCase().includes('cannot identify')) {
+            return res.status(400).json({ error: 'Could not extract schema from this image. Please upload a database diagram or ERD.' });
+        }
+
+        res.json({ schema: cleanSchema });
+    } catch (error) {
+        console.error('Image to schema error:', error);
+        res.status(500).json({ error: 'Failed to extract schema from image' });
+    }
+});
+
+// Query autocomplete suggestions based on schema context
+app.post('/api/query-suggestions', async (req, res) => {
+    try {
+        const { partialQuery, schema } = req.body;
+
+        if (!partialQuery) {
+            return res.status(400).json({ error: 'Partial query is required' });
+        }
+
+        const apiKey = process.env.GEMINI_API_KEY;
+        if (!apiKey) {
+            return res.status(500).json({ error: 'Gemini API key not configured' });
+        }
+
+        const response = await fetch(
+            `https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key=${apiKey}`,
+            {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    contents: [{
+                        parts: [{
+                            text: `Given this partial natural language query, suggest 3-5 complete query descriptions that a user might want.
+
+${schema ? `Database Schema:\n${schema}\n\n` : ''}
+Partial query: "${partialQuery}"
+
+Return a JSON array of suggestion objects with this structure:
+{
+  "text": "<complete query suggestion>",
+  "description": "<brief explanation of what this query would do>"
+}
+
+Consider the schema context if provided. Suggestions should be practical, common database operations. Return ONLY the JSON array.`
+                        }]
+                    }],
+                    generationConfig: {
+                        temperature: 0.7,
+                        maxOutputTokens: 1024
+                    }
+                })
+            }
+        );
+
+        const data = await response.json();
+
+        if (data.error) {
+            console.error('Gemini API error:', data.error);
+            return res.status(500).json({ error: data.error.message });
+        }
+
+        // Check if we got a valid response
+        if (!data.candidates || !data.candidates[0]?.content?.parts?.[0]?.text) {
+            console.error('Empty Gemini response:', JSON.stringify(data).substring(0, 500));
+            return res.json({ suggestions: [] });
+        }
+
+        const resultText = data.candidates[0].content.parts[0].text;
+        console.log('Suggestions raw response:', resultText.substring(0, 500));
+        const cleanJson = resultText.replace(/```json\s*/gi, '').replace(/```\s*/g, '').trim();
+
+        try {
+            // Try to extract JSON array or object
+            let suggestions;
+            const arrayMatch = cleanJson.match(/\[[\s\S]*\]/);
+            if (arrayMatch) {
+                // Clean up common JSON issues
+                let jsonStr = arrayMatch[0]
+                    .replace(/,\s*]/g, ']')  // Remove trailing commas
+                    .replace(/,\s*}/g, '}');
+                suggestions = JSON.parse(jsonStr);
+            } else {
+                // Try parsing as-is (might be wrapped in object)
+                const parsed = JSON.parse(cleanJson);
+                suggestions = Array.isArray(parsed) ? parsed : parsed.suggestions || [];
+            }
+            console.log('Parsed suggestions count:', Array.isArray(suggestions) ? suggestions.length : 0);
+            res.json({ suggestions: Array.isArray(suggestions) ? suggestions : [] });
+        } catch (parseError) {
+            console.error('Suggestions parse error:', parseError);
+            console.error('Clean JSON was:', cleanJson.substring(0, 300));
+            res.json({ suggestions: [] });
+        }
+    } catch (error) {
+        console.error('Query suggestions error:', error);
+        res.status(500).json({ error: 'Failed to generate suggestions' });
+    }
+});
+
+// Multi-query support - Generate multiple SQL statements from natural language
+app.post('/api/generate-multi-sql', async (req, res) => {
+    try {
+        const { prompt, schema, dialect = 'postgresql' } = req.body;
+
+        if (!prompt) {
+            return res.status(400).json({ error: 'Prompt is required' });
+        }
+
+        const apiKey = process.env.GEMINI_API_KEY;
+        if (!apiKey) {
+            return res.status(500).json({ error: 'Gemini API key not configured' });
+        }
+
+        const response = await fetch(
+            `https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key=${apiKey}`,
+            {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    contents: [{
+                        parts: [{
+                            text: `Generate multiple ${dialect.toUpperCase()} SQL queries based on this request. The request may contain multiple operations or a complex workflow.
+
+Return a JSON array where each element has this structure:
+{
+  "description": "<brief description of what this query does>",
+  "sql": "<the SQL statement>",
+  "order": <execution order number starting from 1>,
+  "dependencies": [<array of order numbers this query depends on, empty if none>]
+}
+
+${schema ? `Database Schema:\n${schema}\n\n` : ''}
+Request: ${prompt}
+
+Return ONLY the JSON array, no markdown or explanations. Ensure queries are in the correct execution order for transactions, CTEs, or dependent operations.`
+                        }]
+                    }],
+                    generationConfig: {
+                        temperature: 0.3,
+                        maxOutputTokens: 4096
+                    }
+                })
+            }
+        );
+
+        const data = await response.json();
+
+        if (data.error) {
+            return res.status(500).json({ error: data.error.message });
+        }
+
+        const resultText = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+        const cleanJson = resultText.replace(/```json\n?/gi, '').replace(/```\n?/gi, '').trim();
+
+        try {
+            const queries = JSON.parse(cleanJson);
+            res.json({ queries });
+        } catch {
+            // If JSON parsing fails, return as single query
+            res.json({
+                queries: [{
+                    description: 'Generated query',
+                    sql: cleanJson,
+                    order: 1,
+                    dependencies: []
+                }]
+            });
+        }
+    } catch (error) {
+        console.error('Multi-query generation error:', error);
+        res.status(500).json({ error: 'Failed to generate queries' });
     }
 });
 

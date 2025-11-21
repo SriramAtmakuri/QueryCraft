@@ -1,5 +1,6 @@
 import { useMemo } from 'react';
 import { Card } from '@/components/ui/card';
+import { Highlight, themes } from 'prism-react-renderer';
 
 interface SQLDiffProps {
   original: string;
@@ -47,15 +48,27 @@ export const SQLDiff = ({
   const getLineClass = (type: string) => {
     switch (type) {
       case 'added':
-        return 'bg-green-500/20 text-green-400';
+        return 'bg-green-500/20';
       case 'removed':
-        return 'bg-red-500/20 text-red-400';
+        return 'bg-red-500/20';
       case 'modified':
-        return 'bg-yellow-500/20 text-yellow-400';
+        return 'bg-yellow-500/20';
       default:
         return '';
     }
   };
+
+  const HighlightedLine = ({ code, className }: { code: string; className: string }) => (
+    <Highlight theme={themes.vsDark} code={code || ' '} language="sql">
+      {({ tokens, getTokenProps }) => (
+        <div className={`px-2 py-0.5 ${className}`}>
+          {tokens[0]?.map((token, key) => (
+            <span key={key} {...getTokenProps({ token })} />
+          ))}
+        </div>
+      )}
+    </Highlight>
+  );
 
   return (
     <div className="grid grid-cols-2 gap-4">
@@ -64,16 +77,15 @@ export const SQLDiff = ({
         <div className="code-bg rounded-lg p-3 overflow-auto max-h-[300px]">
           <pre className="text-xs font-mono">
             {diff.map((line, idx) => (
-              <div
+              <HighlightedLine
                 key={`orig-${idx}`}
-                className={`px-2 py-0.5 ${
+                code={line.original}
+                className={
                   line.type === 'removed' || line.type === 'modified'
                     ? getLineClass(line.type === 'modified' ? 'removed' : line.type)
                     : ''
-                }`}
-              >
-                {line.original || '\u00A0'}
-              </div>
+                }
+              />
             ))}
           </pre>
         </div>
@@ -84,16 +96,15 @@ export const SQLDiff = ({
         <div className="code-bg rounded-lg p-3 overflow-auto max-h-[300px]">
           <pre className="text-xs font-mono">
             {diff.map((line, idx) => (
-              <div
+              <HighlightedLine
                 key={`mod-${idx}`}
-                className={`px-2 py-0.5 ${
+                code={line.modified}
+                className={
                   line.type === 'added' || line.type === 'modified'
                     ? getLineClass(line.type === 'modified' ? 'added' : line.type)
                     : ''
-                }`}
-              >
-                {line.modified || '\u00A0'}
-              </div>
+                }
+              />
             ))}
           </pre>
         </div>

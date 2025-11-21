@@ -1,6 +1,7 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import {
@@ -11,6 +12,13 @@ import {
   DialogTrigger,
 } from '@/components/ui/dialog';
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+import {
   History,
   Star,
   Trash2,
@@ -20,7 +28,7 @@ import {
   Bookmark,
   ChevronRight,
   Wand2,
-  X,
+  Search,
 } from 'lucide-react';
 import {
   getQueryHistory,
@@ -46,6 +54,8 @@ export const QueryPanel = ({ onSelectQuery, onSelectSQL }: QueryPanelProps) => {
   const [bookmarks, setBookmarks] = useState<QueryHistoryItem[]>([]);
   const [selectedCategory, setSelectedCategory] = useState<string>('');
   const [isOpen, setIsOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [dialectFilter, setDialectFilter] = useState<string>('all');
 
   const refreshData = () => {
     setHistory(getQueryHistory());
@@ -55,6 +65,23 @@ export const QueryPanel = ({ onSelectQuery, onSelectSQL }: QueryPanelProps) => {
   useEffect(() => {
     refreshData();
   }, [isOpen]);
+
+  // Filter history based on search and dialect
+  const filteredHistory = useMemo(() => {
+    return history.filter(item => {
+      const matchesSearch = searchQuery === '' ||
+        item.prompt.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        item.sql.toLowerCase().includes(searchQuery.toLowerCase());
+      const matchesDialect = dialectFilter === 'all' || item.dialect === dialectFilter;
+      return matchesSearch && matchesDialect;
+    });
+  }, [history, searchQuery, dialectFilter]);
+
+  // Get unique dialects from history
+  const dialects = useMemo(() => {
+    const uniqueDialects = new Set(history.map(h => h.dialect));
+    return Array.from(uniqueDialects);
+  }, [history]);
 
   const handleToggleBookmark = (id: string) => {
     const isNowBookmarked = toggleBookmark(id);
@@ -119,9 +146,32 @@ export const QueryPanel = ({ onSelectQuery, onSelectSQL }: QueryPanelProps) => {
           </TabsList>
 
           <TabsContent value="history" className="mt-4">
+            {/* Search and Filter */}
+            <div className="flex gap-2 mb-3">
+              <div className="relative flex-1">
+                <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+                <Input
+                  placeholder="Search queries..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  className="pl-8 h-9"
+                />
+              </div>
+              <Select value={dialectFilter} onValueChange={setDialectFilter}>
+                <SelectTrigger className="w-[120px] h-9">
+                  <SelectValue placeholder="Dialect" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All</SelectItem>
+                  {dialects.map(d => (
+                    <SelectItem key={d} value={d}>{d.toUpperCase()}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
             <div className="flex justify-between items-center mb-3">
               <span className="text-sm text-muted-foreground">
-                {history.length} queries
+                {filteredHistory.length} of {history.length} queries
               </span>
               {history.length > 0 && (
                 <Button
@@ -135,16 +185,18 @@ export const QueryPanel = ({ onSelectQuery, onSelectSQL }: QueryPanelProps) => {
                 </Button>
               )}
             </div>
-            <ScrollArea className="h-[400px]">
-              {history.length === 0 ? (
+            <ScrollArea className="h-[350px]">
+              {filteredHistory.length === 0 ? (
                 <div className="text-center py-8 text-muted-foreground">
                   <History className="w-12 h-12 mx-auto mb-3 opacity-50" />
-                  <p>No query history yet</p>
-                  <p className="text-xs mt-1">Generated queries will appear here</p>
+                  <p>{history.length === 0 ? 'No query history yet' : 'No matching queries'}</p>
+                  <p className="text-xs mt-1">
+                    {history.length === 0 ? 'Generated queries will appear here' : 'Try different search terms'}
+                  </p>
                 </div>
               ) : (
                 <div className="space-y-2">
-                  {history.map((item) => (
+                  {filteredHistory.map((item) => (
                     <HistoryItem
                       key={item.id}
                       item={item}

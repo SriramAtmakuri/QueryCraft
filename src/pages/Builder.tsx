@@ -4,7 +4,9 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Sparkles, Play, Copy, Download, Database as DatabaseIcon, RefreshCw, MessageSquare, Zap, ArrowRightLeft, Table as TableIcon, FileCode, Wand2, GitCompare } from "lucide-react";
+import { Sparkles, Play, Copy, Download, Database as DatabaseIcon, RefreshCw, MessageSquare, Zap, ArrowRightLeft, Table as TableIcon, FileCode, Wand2, GitCompare, MoreHorizontal, Bug, Activity, Layers } from "lucide-react";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { toast } from "sonner";
 import { SchemaVisualizer } from "@/components/SchemaVisualizer";
@@ -16,8 +18,12 @@ import { SQLDiff } from "@/components/SQLDiff";
 import { PerformanceAnalyzer } from "@/components/PerformanceAnalyzer";
 import { SQLDebugger } from "@/components/SQLDebugger";
 import { SchemaGenerator } from "@/components/SchemaGenerator";
+import { ImageSchemaUploader } from "@/components/ImageSchemaUploader";
 import { QueryShare } from "@/components/QueryShare";
 import { SQLHighlighter } from "@/components/SQLHighlighter";
+import { SQLLinter } from "@/components/SQLLinter";
+import { MultiQueryPanel } from "@/components/MultiQueryPanel";
+import { QuerySuggestions } from "@/components/QuerySuggestions";
 import { Header } from "@/components/Header";
 import { api } from "@/lib/api";
 import { useSchema } from "@/context/SchemaContext";
@@ -40,7 +46,13 @@ const Builder = () => {
   const [convertDialect, setConvertDialect] = useState("mysql");
   const [isConverting, setIsConverting] = useState(false);
   const [convertedSQL, setConvertedSQL] = useState("");
-  const [optimization, setOptimization] = useState("");
+  const [optimization, setOptimization] = useState<{
+    optimizedQuery?: string;
+    improvements?: { type: string; description: string; impact: string }[];
+    indexes?: { table: string; columns: string[]; sql: string; reason: string }[];
+    tips?: string[];
+    summary?: string;
+  } | null>(null);
   const [isOptimizing, setIsOptimizing] = useState(false);
   const [activeTab, setActiveTab] = useState("natural");
   const [mockResults, setMockResults] = useState<{ columns: string[]; rows: string[][] } | null>(null);
@@ -49,7 +61,10 @@ const Builder = () => {
   const [exportORM, setExportORM] = useState("prisma");
   const [exportedCode, setExportedCode] = useState("");
   const [isExporting, setIsExporting] = useState(false);
-  const [showDiff, setShowDiff] = useState(false);
+  const [showDiff, setShowDiff] = useState(true);
+  const [multiQueryMode, setMultiQueryMode] = useState(false);
+  const [multiQueries, setMultiQueries] = useState<{ description: string; sql: string; order: number; dependencies: number[] }[]>([]);
+  const [expandedSection, setExpandedSection] = useState<{ title: string; explanation: string; columns?: string[] } | null>(null);
 
   const { schemaText, setSchemaText } = useSchema();
 
@@ -104,11 +119,24 @@ const Builder = () => {
 
     setIsGenerating(true);
     try {
-      const result = await api.generateSQL(query, schemaText, dialect);
-      setGeneratedSQL(result.sql);
-      // Save to history
-      addToHistory(query, result.sql, dialect);
-      toast.success("Query generated successfully!");
+      if (multiQueryMode) {
+        const result = await api.generateMultiSQL(query, schemaText, dialect);
+        setMultiQueries(result.queries);
+        // Combine all queries for the main display
+        const combined = result.queries
+          .sort((a: { order: number }, b: { order: number }) => a.order - b.order)
+          .map((q: { sql: string }) => q.sql)
+          .join(';\n\n');
+        setGeneratedSQL(combined);
+        addToHistory(query, combined, dialect);
+        toast.success(`${result.queries.length} queries generated!`);
+      } else {
+        const result = await api.generateSQL(query, schemaText, dialect);
+        setGeneratedSQL(result.sql);
+        setMultiQueries([]);
+        addToHistory(query, result.sql, dialect);
+        toast.success("Query generated successfully!");
+      }
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Failed to generate SQL");
     } finally {
@@ -143,14 +171,8 @@ const Builder = () => {
     setIsExplaining(true);
     try {
       const result = await api.explainSQL(generatedSQL);
-      // Try to parse as structured JSON, fallback to legacy format
-      try {
-        const parsed = JSON.parse(result.explanation);
-        setExplanation(parsed);
-      } catch {
-        // Fallback for non-JSON response
-        setExplanation({ summary: result.explanation });
-      }
+      // Result is already structured JSON from backend
+      setExplanation(result);
       toast.success("Explanation generated!");
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Failed to explain SQL");
@@ -186,7 +208,8 @@ const Builder = () => {
     setIsOptimizing(true);
     try {
       const result = await api.optimizeSQL(generatedSQL, schemaText);
-      setOptimization(result.optimization);
+      // Result is already structured JSON from backend
+      setOptimization(result);
       toast.success("Optimization analysis complete!");
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Failed to optimize SQL");
@@ -303,31 +326,53 @@ const Builder = () => {
                       </div>
                     </div>
 
-                    <Textarea
-                      placeholder="Describe your query in plain English...&#10;&#10;Example: Show me all users who signed up last month and made a purchase over $100"
-                      value={query}
-                      onChange={(e) => setQuery(e.target.value)}
-                      className="min-h-[200px] font-mono"
-                    />
+                    <div className="relative">
+                      <Textarea
+                        placeholder="Describe your query in plain English...&#10;&#10;Example: Show me all users who signed up last month and made a purchase over $100"
+                        value={query}
+                        onChange={(e) => setQuery(e.target.value)}
+                        className="min-h-[200px] font-mono"
+                      />
+                      <QuerySuggestions
+                        query={query}
+                        schema={schemaText}
+                        onSelect={(suggestion) => setQuery(suggestion)}
+                      />
+                    </div>
 
-                    <Button
-                      onClick={handleGenerate}
-                      disabled={isGenerating}
-                      className="w-full"
-                      size="lg"
-                    >
-                      {isGenerating ? (
-                        <>
-                          <RefreshCw className="w-4 h-4 mr-2 animate-spin" />
-                          Generating...
-                        </>
-                      ) : (
-                        <>
-                          <Sparkles className="w-4 h-4 mr-2" />
-                          Generate SQL
-                        </>
-                      )}
-                    </Button>
+                    <div className="flex items-center gap-3">
+                      <Button
+                        onClick={handleGenerate}
+                        disabled={isGenerating}
+                        className="flex-1"
+                        size="lg"
+                      >
+                        {isGenerating ? (
+                          <>
+                            <RefreshCw className="w-4 h-4 mr-2 animate-spin" />
+                            Generating...
+                          </>
+                        ) : (
+                          <>
+                            <Sparkles className="w-4 h-4 mr-2" />
+                            {multiQueryMode ? 'Generate Multi-Query' : 'Generate SQL'}
+                          </>
+                        )}
+                      </Button>
+                      <Button
+                        variant={multiQueryMode ? "secondary" : "outline"}
+                        size="lg"
+                        onClick={() => setMultiQueryMode(!multiQueryMode)}
+                        title="Toggle multi-query mode for complex operations"
+                      >
+                        <Layers className="w-4 h-4" />
+                      </Button>
+                    </div>
+                    {multiQueryMode && (
+                      <p className="text-xs text-muted-foreground text-center">
+                        Multi-query mode: Generate multiple related SQL statements
+                      </p>
+                    )}
                   </div>
                 </Card>
 
@@ -356,16 +401,40 @@ const Builder = () => {
               <div className="space-y-4">
                 <Card className="p-6">
                   <Tabs value={outputTab} onValueChange={setOutputTab} className="w-full">
-                    <TabsList className="w-full flex-wrap h-auto gap-1">
-                      <TabsTrigger value="sql" className="flex-1 text-xs">SQL</TabsTrigger>
-                      <TabsTrigger value="results" className="flex-1 text-xs">Results</TabsTrigger>
-                      <TabsTrigger value="explain" className="flex-1 text-xs">Explain</TabsTrigger>
-                      <TabsTrigger value="optimize" className="flex-1 text-xs">Optimize</TabsTrigger>
-                      <TabsTrigger value="convert" className="flex-1 text-xs">Convert</TabsTrigger>
-                      <TabsTrigger value="export" className="flex-1 text-xs">Export</TabsTrigger>
-                      <TabsTrigger value="performance" className="flex-1 text-xs">Perf</TabsTrigger>
-                      <TabsTrigger value="debug" className="flex-1 text-xs">Debug</TabsTrigger>
-                    </TabsList>
+                    <div className="flex items-center gap-2 mb-4">
+                      <TabsList className="flex-1 grid grid-cols-4">
+                        <TabsTrigger value="sql" className="text-xs px-4 border-r border-border">SQL</TabsTrigger>
+                        <TabsTrigger value="results" className="text-xs px-4 border-r border-border">Results</TabsTrigger>
+                        <TabsTrigger value="explain" className="text-xs px-4 border-r border-border">Explain</TabsTrigger>
+                        <TabsTrigger value="optimize" className="text-xs px-4">Optimize</TabsTrigger>
+                      </TabsList>
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <Button variant="outline" size="sm" className="h-8">
+                            <MoreHorizontal className="w-4 h-4 mr-1" />
+                            More
+                          </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end">
+                          <DropdownMenuItem onClick={() => setOutputTab("convert")}>
+                            <ArrowRightLeft className="w-4 h-4 mr-2" />
+                            Convert Dialect
+                          </DropdownMenuItem>
+                          <DropdownMenuItem onClick={() => setOutputTab("export")}>
+                            <FileCode className="w-4 h-4 mr-2" />
+                            Export to ORM
+                          </DropdownMenuItem>
+                          <DropdownMenuItem onClick={() => setOutputTab("performance")}>
+                            <Activity className="w-4 h-4 mr-2" />
+                            Performance Analysis
+                          </DropdownMenuItem>
+                          <DropdownMenuItem onClick={() => setOutputTab("debug")}>
+                            <Bug className="w-4 h-4 mr-2" />
+                            Debug Query
+                          </DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    </div>
 
                     <TabsContent value="sql" className="space-y-4">
                       <div className="flex items-center justify-between">
@@ -421,6 +490,28 @@ const Builder = () => {
                           </div>
                         )}
                       </div>
+
+                      {/* Multi-Query Panel */}
+                      {multiQueries.length > 0 && (
+                        <MultiQueryPanel
+                          queries={multiQueries}
+                          onRunQuery={(sql) => {
+                            setGeneratedSQL(sql);
+                            setMultiQueries([]);
+                          }}
+                          onSelectAll={(combined) => {
+                            setGeneratedSQL(combined);
+                          }}
+                        />
+                      )}
+
+                      {/* SQL Linting */}
+                      {generatedSQL && (
+                        <Card className="p-3">
+                          <h3 className="text-sm font-semibold mb-2">SQL Analysis</h3>
+                          <SQLLinter sql={generatedSQL} />
+                        </Card>
+                      )}
                     </TabsContent>
 
                     <TabsContent value="results" className="space-y-4">
@@ -516,18 +607,30 @@ const Builder = () => {
                             {explanation.sections && explanation.sections.length > 0 && (
                               <div className="space-y-3">
                                 {explanation.sections.map((section, idx) => (
-                                  <Card key={idx} className="p-4">
+                                  <Card
+                                    key={idx}
+                                    className="p-4 cursor-pointer hover:bg-muted/50 transition-colors"
+                                    onClick={() => setExpandedSection(section)}
+                                  >
                                     <h4 className="text-sm font-semibold mb-2">{section.title}</h4>
-                                    <p className="text-sm text-muted-foreground">{section.explanation}</p>
+                                    <p className="text-sm text-muted-foreground line-clamp-2">
+                                      {section.explanation}
+                                    </p>
                                     {section.columns && section.columns.length > 0 && (
                                       <div className="mt-2 flex flex-wrap gap-1">
-                                        {section.columns.map((col, colIdx) => (
+                                        {section.columns.slice(0, 3).map((col, colIdx) => (
                                           <span key={colIdx} className="text-xs px-2 py-1 bg-muted rounded">
                                             {col}
                                           </span>
                                         ))}
+                                        {section.columns.length > 3 && (
+                                          <span className="text-xs px-2 py-1 bg-muted rounded">
+                                            +{section.columns.length - 3} more
+                                          </span>
+                                        )}
                                       </div>
                                     )}
+                                    <p className="text-xs text-primary mt-2">Click to expand</p>
                                   </Card>
                                 ))}
                               </div>
@@ -568,7 +671,7 @@ const Builder = () => {
                       <div className="flex items-center justify-between">
                         <h2 className="text-lg font-semibold">Query Optimization</h2>
                         <div className="flex items-center gap-2">
-                          {optimization && (
+                          {optimization?.optimizedQuery && (
                             <Button
                               variant={showDiff ? "secondary" : "ghost"}
                               size="sm"
@@ -595,26 +698,106 @@ const Builder = () => {
                         </div>
                       </div>
 
-                      {showDiff && optimization && generatedSQL ? (
-                        <SQLDiff
-                          original={generatedSQL}
-                          modified={optimization.split('\n\n')[0] || optimization}
-                          originalLabel="Original SQL"
-                          modifiedLabel="Optimized SQL"
-                        />
-                      ) : (
-                        <div className="code-bg rounded-lg p-4 min-h-[300px] overflow-auto">
-                          {optimization ? (
-                            <div className="text-sm text-foreground whitespace-pre-wrap">
-                              {optimization}
-                            </div>
-                          ) : (
-                            <div className="flex items-center justify-center h-[300px] text-muted-foreground">
-                              Click "Optimize" to get performance suggestions and index recommendations
-                            </div>
-                          )}
-                        </div>
-                      )}
+                      <div className="min-h-[300px] overflow-auto">
+                        {optimization ? (
+                          <div className="space-y-4">
+                            {/* Summary */}
+                            {optimization.summary && (
+                              <Card className="p-4 border-primary/30">
+                                <h4 className="text-sm font-semibold mb-2">Summary</h4>
+                                <p className="text-sm text-muted-foreground">{optimization.summary}</p>
+                              </Card>
+                            )}
+
+                            {/* Optimized Query */}
+                            {optimization.optimizedQuery && (
+                              <Card className="p-4">
+                                <div className="flex items-center justify-between mb-3">
+                                  <h4 className="text-sm font-semibold">Optimized Query</h4>
+                                  <Button
+                                    variant="secondary"
+                                    size="sm"
+                                    onClick={() => {
+                                      setGeneratedSQL(optimization.optimizedQuery!);
+                                      toast.success("Optimized query applied");
+                                    }}
+                                  >
+                                    Use Optimized
+                                  </Button>
+                                </div>
+                                {showDiff ? (
+                                  <SQLDiff
+                                    original={generatedSQL}
+                                    modified={optimization.optimizedQuery}
+                                    originalLabel="Original"
+                                    modifiedLabel="Optimized"
+                                  />
+                                ) : (
+                                  <div className="code-bg rounded p-3">
+                                    <SQLHighlighter code={optimization.optimizedQuery} className="text-xs" />
+                                  </div>
+                                )}
+                              </Card>
+                            )}
+
+                            {/* Improvements */}
+                            {optimization.improvements && optimization.improvements.length > 0 && (
+                              <Card className="p-4">
+                                <h4 className="text-sm font-semibold mb-3">Improvements</h4>
+                                <div className="space-y-2">
+                                  {optimization.improvements.map((imp, idx) => (
+                                    <div key={idx} className="flex items-start gap-2">
+                                      <span className={`text-xs px-2 py-0.5 rounded ${
+                                        imp.impact === 'high' ? 'bg-green-500/20 text-green-400' :
+                                        imp.impact === 'medium' ? 'bg-yellow-500/20 text-yellow-400' :
+                                        'bg-muted text-muted-foreground'
+                                      }`}>
+                                        {imp.type}
+                                      </span>
+                                      <p className="text-sm text-muted-foreground flex-1">{imp.description}</p>
+                                    </div>
+                                  ))}
+                                </div>
+                              </Card>
+                            )}
+
+                            {/* Suggested Indexes */}
+                            {optimization.indexes && optimization.indexes.length > 0 && (
+                              <Card className="p-4">
+                                <h4 className="text-sm font-semibold mb-3">Suggested Indexes</h4>
+                                <div className="space-y-3">
+                                  {optimization.indexes.map((index, idx) => (
+                                    <div key={idx} className="border-l-2 border-primary/50 pl-3">
+                                      <p className="text-sm font-medium">{index.table} ({index.columns.join(', ')})</p>
+                                      <p className="text-xs text-muted-foreground mb-2">{index.reason}</p>
+                                      <pre className="text-xs bg-muted p-2 rounded overflow-x-auto">{index.sql}</pre>
+                                    </div>
+                                  ))}
+                                </div>
+                              </Card>
+                            )}
+
+                            {/* Tips */}
+                            {optimization.tips && optimization.tips.length > 0 && (
+                              <Card className="p-4 border-yellow-500/30">
+                                <h4 className="text-sm font-semibold mb-2">Performance Tips</h4>
+                                <ul className="text-sm text-muted-foreground space-y-1">
+                                  {optimization.tips.map((tip, idx) => (
+                                    <li key={idx} className="flex items-start gap-2">
+                                      <span className="text-yellow-500">•</span>
+                                      {tip}
+                                    </li>
+                                  ))}
+                                </ul>
+                              </Card>
+                            )}
+                          </div>
+                        ) : (
+                          <div className="flex items-center justify-center h-[300px] text-muted-foreground">
+                            Click "Optimize" to get performance suggestions and index recommendations
+                          </div>
+                        )}
+                      </div>
                     </TabsContent>
 
                     <TabsContent value="convert" className="space-y-4">
@@ -669,9 +852,7 @@ const Builder = () => {
                       ) : (
                         <div className="code-bg rounded-lg p-4 min-h-[300px] overflow-auto">
                           {convertedSQL ? (
-                            <pre className="text-sm font-mono text-foreground">
-                              <code>{convertedSQL}</code>
-                            </pre>
+                            <SQLHighlighter code={convertedSQL} className="text-sm" />
                           ) : (
                             <div className="flex items-center justify-center h-[300px] text-muted-foreground">
                               Select a target dialect and click "Convert" to translate your SQL
@@ -761,9 +942,10 @@ const Builder = () => {
 
           <TabsContent value="schema" className="mt-0">
             <div className="space-y-6">
-              <div className="grid md:grid-cols-2 gap-4">
+              <div className="grid md:grid-cols-3 gap-4">
                 <SchemaUploader />
                 <SchemaGenerator />
+                <ImageSchemaUploader />
               </div>
               <Card className="p-6">
                 <h2 className="text-lg font-semibold mb-4 flex items-center gap-2">
@@ -776,6 +958,32 @@ const Builder = () => {
           </TabsContent>
         </Tabs>
       </div>
+
+      {/* Expanded Section Modal */}
+      <Dialog open={!!expandedSection} onOpenChange={(open) => !open && setExpandedSection(null)}>
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle>{expandedSection?.title}</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <p className="text-sm text-muted-foreground leading-relaxed">
+              {expandedSection?.explanation}
+            </p>
+            {expandedSection?.columns && expandedSection.columns.length > 0 && (
+              <div>
+                <h4 className="text-sm font-semibold mb-2">Columns Involved</h4>
+                <div className="flex flex-wrap gap-1">
+                  {expandedSection.columns.map((col, idx) => (
+                    <span key={idx} className="text-xs px-2 py-1 bg-muted rounded">
+                      {col}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 };

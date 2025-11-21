@@ -149,5 +149,50 @@ export const api = {
     }
 
     return response.json();
+  },
+
+  async imageToSchema(imageBase64: string) {
+    const response = await fetch(`${API_BASE}/api/image-to-schema`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ image: imageBase64 })
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || 'Failed to extract schema from image');
+    }
+
+    return response.json();
+  },
+
+  async generateMultiSQL(prompt: string, schema?: string, dialect: string = 'postgresql') {
+    const response = await fetch(`${API_BASE}/api/generate-multi-sql`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ prompt, schema, dialect })
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || 'Failed to generate multi-query');
+    }
+
+    return response.json();
+  },
+
+  async getQuerySuggestions(partialQuery: string, schema?: string) {
+    const response = await fetch(`${API_BASE}/api/query-suggestions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ partialQuery, schema })
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || 'Failed to get suggestions');
+    }
+
+    return response.json();
   }
 };
