@@ -75,18 +75,13 @@ app.get('/api/users', async (req, res) => {
     }
 });
 
-// Gemini API - Generate SQL from natural language
+// Generate SQL from natural language
 app.post('/api/generate-sql', async (req, res) => {
     try {
         const { prompt, schema, dialect = 'postgresql' } = req.body;
 
         if (!prompt) {
             return res.status(400).json({ error: 'Prompt is required' });
-        }
-
-        const apiKey = process.env.GEMINI_API_KEY;
-        if (!apiKey) {
-            return res.status(500).json({ error: 'Gemini API key not configured' });
         }
 
         const systemPrompt = `You are an expert SQL query generator. Generate optimized ${dialect.toUpperCase()} SQL queries based on user requests.
@@ -98,43 +93,27 @@ Rules:
 - Use proper ${dialect} syntax
 - Include appropriate JOINs when needed
 - Add comments for complex queries
-- Optimize for performance`;
+- Optimize for performance
 
-        const response = await fetch(
-            `https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key=${apiKey}`,
-            {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    contents: [{
-                        parts: [{ text: `${systemPrompt}\n\nUser request: ${prompt}` }]
-                    }],
-                    generationConfig: {
-                        temperature: 0.3,
-                        maxOutputTokens: 1024
-                    }
-                })
-            }
-        );
+User request: ${prompt}`;
 
-        const data = await response.json();
+        const result = await generateContent({
+            prompt: systemPrompt,
+            temperature: 0.3,
+            maxTokens: 1024
+        });
 
-        if (data.error) {
-            return res.status(500).json({ error: data.error.message });
-        }
-
-        const sql = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
         // Clean up the response - remove markdown code blocks if present
-        const cleanSQL = sql.replace(/```sql\n?/gi, '').replace(/```\n?/gi, '').trim();
+        const cleanSQL = result.text.replace(/```sql\n?/gi, '').replace(/```\n?/gi, '').trim();
 
         res.json({ sql: cleanSQL });
-    } catch (error) {
+    } catch (error: any) {
         console.error('Generate SQL error:', error);
-        res.status(500).json({ error: 'Failed to generate SQL' });
+        res.status(500).json({ error: error.message || 'Failed to generate SQL' });
     }
 });
 
-// Gemini API - Explain SQL query
+// Explain SQL query
 app.post('/api/explain-sql', async (req, res) => {
     try {
         const { sql } = req.body;
@@ -143,20 +122,7 @@ app.post('/api/explain-sql', async (req, res) => {
             return res.status(400).json({ error: 'SQL query is required' });
         }
 
-        const apiKey = process.env.GEMINI_API_KEY;
-        if (!apiKey) {
-            return res.status(500).json({ error: 'Gemini API key not configured' });
-        }
-
-        const response = await fetch(
-            `https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key=${apiKey}`,
-            {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    contents: [{
-                        parts: [{
-                            text: `Analyze and explain this SQL query in detail. Return ONLY a raw JSON object (no markdown, no code blocks) with this exact structure:
+        const prompt = `Analyze and explain this SQL query in detail. Return ONLY a raw JSON object (no markdown, no code blocks) with this exact structure:
 {
   "summary": "<one clear sentence describing what this query accomplishes>",
   "sections": [
@@ -176,24 +142,15 @@ IMPORTANT:
 - Provide meaningful explanations that help someone understand the query logic
 
 SQL Query to explain:
-${sql}`
-                        }]
-                    }],
-                    generationConfig: {
-                        temperature: 0.3,
-                        maxOutputTokens: 2048
-                    }
-                })
-            }
-        );
+${sql}`;
 
-        const data = await response.json();
+        const result = await generateContent({
+            prompt,
+            temperature: 0.3,
+            maxTokens: 2048
+        });
 
-        if (data.error) {
-            return res.status(500).json({ error: data.error.message });
-        }
-
-        const resultText = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+        const resultText = result.text;
         // Remove markdown code blocks if present
         const cleanedText = resultText.replace(/```json\s*/gi, '').replace(/```\s*/g, '').trim();
         const jsonMatch = cleanedText.match(/\{[\s\S]*\}/);
@@ -202,8 +159,7 @@ ${sql}`
                 // Try to fix common JSON issues
                 let jsonStr = jsonMatch[0]
                     .replace(/,\s*}/g, '}')  // Remove trailing commas before }
-                    .replace(/,\s*]/g, ']')  // Remove trailing commas before ]
-                    .replace(/\n/g, ' ');    // Remove newlines inside strings
+                    .replace(/,\s*]/g, ']'); // Remove trailing commas before ]
                 const explanation = JSON.parse(jsonStr);
                 res.json(explanation);
             } catch (parseError) {
@@ -224,13 +180,13 @@ ${sql}`
                 tips: []
             });
         }
-    } catch (error) {
+    } catch (error: any) {
         console.error('Explain SQL error:', error);
-        res.status(500).json({ error: 'Failed to explain SQL' });
+        res.status(500).json({ error: error.message || 'Failed to explain SQL' });
     }
 });
 
-// Gemini API - Convert SQL between dialects
+// Convert SQL between dialects
 app.post('/api/convert-sql', async (req, res) => {
     try {
         const { sql, fromDialect, toDialect } = req.body;
@@ -239,47 +195,22 @@ app.post('/api/convert-sql', async (req, res) => {
             return res.status(400).json({ error: 'SQL and target dialect are required' });
         }
 
-        const apiKey = process.env.GEMINI_API_KEY;
-        if (!apiKey) {
-            return res.status(500).json({ error: 'Gemini API key not configured' });
-        }
+        const result = await generateContent({
+            prompt: `Convert this ${fromDialect || 'SQL'} query to ${toDialect}. Return ONLY the converted SQL, no explanations:\n\n${sql}`,
+            temperature: 0.2,
+            maxTokens: 1024
+        });
 
-        const response = await fetch(
-            `https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key=${apiKey}`,
-            {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    contents: [{
-                        parts: [{
-                            text: `Convert this ${fromDialect || 'SQL'} query to ${toDialect}. Return ONLY the converted SQL, no explanations:\n\n${sql}`
-                        }]
-                    }],
-                    generationConfig: {
-                        temperature: 0.2,
-                        maxOutputTokens: 1024
-                    }
-                })
-            }
-        );
-
-        const data = await response.json();
-
-        if (data.error) {
-            return res.status(500).json({ error: data.error.message });
-        }
-
-        const converted = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
-        const cleanSQL = converted.replace(/```sql\n?/gi, '').replace(/```\n?/gi, '').trim();
+        const cleanSQL = result.text.replace(/```sql\n?/gi, '').replace(/```\n?/gi, '').trim();
 
         res.json({ sql: cleanSQL });
-    } catch (error) {
+    } catch (error: any) {
         console.error('Convert SQL error:', error);
-        res.status(500).json({ error: 'Failed to convert SQL' });
+        res.status(500).json({ error: error.message || 'Failed to convert SQL' });
     }
 });
 
-// Gemini API - Optimize SQL query
+// Optimize SQL query
 app.post('/api/optimize-sql', async (req, res) => {
     try {
         const { sql, schema } = req.body;
@@ -288,20 +219,7 @@ app.post('/api/optimize-sql', async (req, res) => {
             return res.status(400).json({ error: 'SQL query is required' });
         }
 
-        const apiKey = process.env.GEMINI_API_KEY;
-        if (!apiKey) {
-            return res.status(500).json({ error: 'Gemini API key not configured' });
-        }
-
-        const response = await fetch(
-            `https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key=${apiKey}`,
-            {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    contents: [{
-                        parts: [{
-                            text: `Analyze and optimize this SQL query for better performance. Return ONLY a raw JSON object (no markdown, no code blocks) with this structure:
+        const prompt = `Analyze and optimize this SQL query for better performance. Return ONLY a raw JSON object (no markdown, no code blocks) with this structure:
 {
   "optimizedQuery": "<the actual optimized SQL query code - must be valid SQL, not a description>",
   "improvements": [
@@ -328,24 +246,15 @@ IMPORTANT:
 - The "optimizedQuery" field MUST contain actual SQL code (SELECT, UPDATE, etc.), NOT a description or explanation
 - If the query is already optimal, return the same query with minor formatting improvements
 
-${schema ? `Schema:\n${schema}\n\n` : ''}Query:\n${sql}`
-                        }]
-                    }],
-                    generationConfig: {
-                        temperature: 0.4,
-                        maxOutputTokens: 2048
-                    }
-                })
-            }
-        );
+${schema ? `Schema:\n${schema}\n\n` : ''}Query:\n${sql}`;
 
-        const data = await response.json();
+        const result = await generateContent({
+            prompt,
+            temperature: 0.4,
+            maxTokens: 2048
+        });
 
-        if (data.error) {
-            return res.status(500).json({ error: data.error.message });
-        }
-
-        const resultText = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+        const resultText = result.text;
         // Remove markdown code blocks if present
         const cleanedText = resultText.replace(/```json\s*/gi, '').replace(/```\s*/g, '').trim();
         const jsonMatch = cleanedText.match(/\{[\s\S]*\}/);
@@ -382,9 +291,9 @@ ${schema ? `Schema:\n${schema}\n\n` : ''}Query:\n${sql}`
                 summary: ''
             });
         }
-    } catch (error) {
+    } catch (error: any) {
         console.error('Optimize SQL error:', error);
-        res.status(500).json({ error: 'Failed to optimize SQL' });
+        res.status(500).json({ error: error.message || 'Failed to optimize SQL' });
     }
 });
 
