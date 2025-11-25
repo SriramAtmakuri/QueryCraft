@@ -1,9 +1,10 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useCallback } from 'react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { ScrollArea } from '@/components/ui/scroll-area';
+import { Skeleton } from '@/components/ui/skeleton';
 import {
   Dialog,
   DialogContent,
@@ -29,6 +30,7 @@ import {
   ChevronRight,
   Wand2,
   Search,
+  ChevronLeft,
 } from 'lucide-react';
 import {
   getQueryHistory,
@@ -37,11 +39,12 @@ import {
   deleteHistoryItem,
   clearHistory,
   formatTimestamp,
-  queryTemplates,
   getTemplateCategories,
   getTemplatesByCategory,
   QueryHistoryItem,
 } from '@/lib/queryManager';
+import { useAuth } from '@/context/AuthContext';
+import { api } from '@/lib/api';
 import { toast } from 'sonner';
 
 interface QueryPanelProps {
@@ -56,15 +59,40 @@ export const QueryPanel = ({ onSelectQuery, onSelectSQL }: QueryPanelProps) => {
   const [isOpen, setIsOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [dialectFilter, setDialectFilter] = useState<string>('all');
+  const [page, setPage] = useState(1);
+  const [totalPages, setTotalPages] = useState(1);
+  const [isLoadingHistory, setIsLoadingHistory] = useState(false);
 
-  const refreshData = () => {
-    setHistory(getQueryHistory());
+  const { token } = useAuth();
+
+  const refreshData = useCallback(async (currentPage: number) => {
+    if (token) {
+      setIsLoadingHistory(true);
+      try {
+        const data = await api.getHistory(currentPage, 20);
+        setHistory(data.items.map((item: { id: string; prompt: string; sql: string; dialect: string; createdAt: string }) => ({
+          id: item.id,
+          prompt: item.prompt,
+          sql: item.sql,
+          dialect: item.dialect,
+          timestamp: new Date(item.createdAt).getTime(),
+          isBookmarked: false,
+        })));
+        setTotalPages(data.pages ?? 1);
+      } catch {
+        setHistory(getQueryHistory());
+      } finally {
+        setIsLoadingHistory(false);
+      }
+    } else {
+      setHistory(getQueryHistory());
+    }
     setBookmarks(getBookmarks());
-  };
+  }, [token]);
 
   useEffect(() => {
-    refreshData();
-  }, [isOpen]);
+    if (isOpen) refreshData(page);
+  }, [isOpen, page, refreshData]);
 
   // Filter history based on search and dialect
   const filteredHistory = useMemo(() => {
@@ -85,20 +113,29 @@ export const QueryPanel = ({ onSelectQuery, onSelectSQL }: QueryPanelProps) => {
 
   const handleToggleBookmark = (id: string) => {
     const isNowBookmarked = toggleBookmark(id);
-    refreshData();
+    refreshData(page);
     toast.success(isNowBookmarked ? 'Added to bookmarks' : 'Removed from bookmarks');
   };
 
-  const handleDelete = (id: string) => {
-    deleteHistoryItem(id);
-    refreshData();
+  const handleDelete = async (id: string) => {
+    if (token) {
+      try { await api.deleteHistoryItem(id); } catch { /* fall through */ }
+    } else {
+      deleteHistoryItem(id);
+    }
+    refreshData(page);
     toast.success('Query deleted');
   };
 
-  const handleClearHistory = () => {
-    clearHistory();
-    refreshData();
-    toast.success('History cleared (bookmarks preserved)');
+  const handleClearHistory = async () => {
+    if (token) {
+      try { await api.clearHistory(); } catch { /* fall through */ }
+    } else {
+      clearHistory();
+    }
+    setPage(1);
+    refreshData(1);
+    toast.success(token ? 'History cleared' : 'History cleared (bookmarks preserved)');
   };
 
   const handleSelectHistoryItem = (item: QueryHistoryItem) => {
@@ -185,8 +222,14 @@ export const QueryPanel = ({ onSelectQuery, onSelectSQL }: QueryPanelProps) => {
                 </Button>
               )}
             </div>
-            <ScrollArea className="h-[350px]">
-              {filteredHistory.length === 0 ? (
+            <ScrollArea className="h-[320px]">
+              {isLoadingHistory ? (
+                <div className="space-y-2 p-1">
+                  {Array.from({ length: 5 }).map((_, i) => (
+                    <Skeleton key={i} className="h-16 w-full rounded-lg" />
+                  ))}
+                </div>
+              ) : filteredHistory.length === 0 ? (
                 <div className="text-center py-8 text-muted-foreground">
                   <History className="w-12 h-12 mx-auto mb-3 opacity-50" />
                   <p>{history.length === 0 ? 'No query history yet' : 'No matching queries'}</p>
@@ -208,6 +251,31 @@ export const QueryPanel = ({ onSelectQuery, onSelectSQL }: QueryPanelProps) => {
                 </div>
               )}
             </ScrollArea>
+            {token && totalPages > 1 && (
+              <div className="flex items-center justify-between mt-3">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  disabled={page <= 1 || isLoadingHistory}
+                  onClick={() => setPage(p => p - 1)}
+                >
+                  <ChevronLeft className="w-4 h-4 mr-1" />
+                  Prev
+                </Button>
+                <span className="text-xs text-muted-foreground">
+                  Page {page} of {totalPages}
+                </span>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  disabled={page >= totalPages || isLoadingHistory}
+                  onClick={() => setPage(p => p + 1)}
+                >
+                  Next
+                  <ChevronRight className="w-4 h-4 ml-1" />
+                </Button>
+              </div>
+            )}
           </TabsContent>
 
           <TabsContent value="bookmarks" className="mt-4">

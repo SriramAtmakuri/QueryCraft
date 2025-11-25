@@ -34,3 +34,16 @@ yarn-error.log*
 *.njsproj
 *.sln
 *.sw?
+
+# SQLite database files
+*.db
+*.db-journal
+*.db-shm
+*.db-wal
+
+# Firebase cache
+.firebase/
+
+# Local env backups
+*.env.backup
+.env.dev.backup

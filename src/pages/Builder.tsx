@@ -2,9 +2,10 @@ import { useState, useEffect } from "react";
 import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Sparkles, Play, Copy, Download, Database as DatabaseIcon, RefreshCw, MessageSquare, Zap, ArrowRightLeft, Table as TableIcon, FileCode, Wand2, GitCompare, MoreHorizontal, Bug, Activity, Layers } from "lucide-react";
+import { Sparkles, Play, Copy, Download, Database as DatabaseIcon, RefreshCw, MessageSquare, Zap, ArrowRightLeft, Table as TableIcon, FileCode, Wand2, GitCompare, MoreHorizontal, Bug, Activity, Layers, FileDown, DollarSign, GitMerge, AlertTriangle } from "lucide-react";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -27,8 +28,14 @@ import { QuerySuggestions } from "@/components/QuerySuggestions";
 import { Header } from "@/components/Header";
 import { api } from "@/lib/api";
 import { useSchema } from "@/context/SchemaContext";
+import { useAuth } from "@/context/AuthContext";
 import { useSearchParams } from "react-router-dom";
 import { addToHistory, formatSQL } from "@/lib/queryManager";
+import { exportToCSV, exportToJSON, exportSQLToFile } from "@/lib/export";
+import { SchemaDriftAnalyzer } from "@/components/SchemaDriftAnalyzer";
+import { MigrationGenerator } from "@/components/MigrationGenerator";
+import { DialectCostEstimator } from "@/components/DialectCostEstimator";
+import { QueryReviewModal } from "@/components/QueryReviewer";
 
 const Builder = () => {
   const [searchParams] = useSearchParams();
@@ -67,6 +74,7 @@ const Builder = () => {
   const [expandedSection, setExpandedSection] = useState<{ title: string; explanation: string; columns?: string[] } | null>(null);
 
   const { schemaText, setSchemaText } = useSchema();
+  const { token } = useAuth();
 
   // Handle URL tab parameter and shared queries
   useEffect(() => {
@@ -77,6 +85,21 @@ const Builder = () => {
     const output = searchParams.get('output');
     if (output && ['sql', 'results', 'explain', 'optimize', 'convert', 'export', 'performance', 'debug'].includes(output)) {
       setOutputTab(output);
+    }
+
+    // Handle reviewId — load query from server and open review mode
+    const reviewId = searchParams.get('reviewId');
+    if (reviewId) {
+      import('@/lib/api').then(({ api }) => {
+        api.getShare(reviewId).then((data: { sql: string; query?: string; dialect?: string; schema?: string }) => {
+          if (data.sql) {
+            setGeneratedSQL(data.sql);
+            if (data.query) setQuery(data.query);
+            if (data.dialect) setDialect(data.dialect);
+            if (data.schema) setSchemaText(data.schema);
+          }
+        }).catch(() => {});
+      });
     }
 
     // Handle shared query from URL
@@ -122,19 +145,20 @@ const Builder = () => {
       if (multiQueryMode) {
         const result = await api.generateMultiSQL(query, schemaText, dialect);
         setMultiQueries(result.queries);
-        // Combine all queries for the main display
         const combined = result.queries
           .sort((a: { order: number }, b: { order: number }) => a.order - b.order)
           .map((q: { sql: string }) => q.sql)
           .join(';\n\n');
         setGeneratedSQL(combined);
         addToHistory(query, combined, dialect);
+        if (token) api.addHistory(query, combined, dialect).catch(() => {});
         toast.success(`${result.queries.length} queries generated!`);
       } else {
         const result = await api.generateSQL(query, schemaText, dialect);
         setGeneratedSQL(result.sql);
         setMultiQueries([]);
         addToHistory(query, result.sql, dialect);
+        if (token) api.addHistory(query, result.sql, dialect).catch(() => {});
         toast.success("Query generated successfully!");
       }
     } catch (error) {
@@ -323,6 +347,12 @@ const Builder = () => {
                           dialect={dialect}
                           schema={schemaText}
                         />
+                        <QueryReviewModal
+                          sql={generatedSQL}
+                          query={query}
+                          dialect={dialect}
+                          schema={schemaText}
+                        />
                       </div>
                     </div>
 
@@ -432,6 +462,10 @@ const Builder = () => {
                             <Bug className="w-4 h-4 mr-2" />
                             Debug Query
                           </DropdownMenuItem>
+                          <DropdownMenuItem onClick={() => setOutputTab("cost")}>
+                            <DollarSign className="w-4 h-4 mr-2" />
+                            Dialect Cost
+                          </DropdownMenuItem>
                         </DropdownMenuContent>
                       </DropdownMenu>
                     </div>
@@ -482,7 +516,15 @@ const Builder = () => {
                       </div>
 
                       <div className="code-bg rounded-lg p-4 min-h-[300px] overflow-auto">
-                        {generatedSQL ? (
+                        {isGenerating ? (
+                          <div className="space-y-2 p-2">
+                            <Skeleton className="h-4 w-3/4" />
+                            <Skeleton className="h-4 w-1/2" />
+                            <Skeleton className="h-4 w-5/6" />
+                            <Skeleton className="h-4 w-2/3" />
+                            <Skeleton className="h-4 w-4/5" />
+                          </div>
+                        ) : generatedSQL ? (
                           <SQLHighlighter code={generatedSQL} className="text-sm" />
                         ) : (
                           <div className="flex items-center justify-center h-[300px] text-muted-foreground">
@@ -517,24 +559,54 @@ const Builder = () => {
                     <TabsContent value="results" className="space-y-4">
                       <div className="flex items-center justify-between">
                         <h2 className="text-lg font-semibold">Query Results (Mock Data)</h2>
-                        <Button
-                          onClick={handleRun}
-                          disabled={!generatedSQL || isRunning}
-                          size="sm"
-                        >
-                          {isRunning ? (
-                            <RefreshCw className="w-4 h-4 animate-spin" />
-                          ) : (
-                            <>
-                              <TableIcon className="w-4 h-4 mr-2" />
-                              Generate Results
-                            </>
+                        <div className="flex gap-2">
+                          {mockResults && (
+                            <DropdownMenu>
+                              <DropdownMenuTrigger asChild>
+                                <Button variant="outline" size="sm">
+                                  <FileDown className="w-4 h-4 mr-2" />
+                                  Export
+                                </Button>
+                              </DropdownMenuTrigger>
+                              <DropdownMenuContent>
+                                <DropdownMenuItem onClick={() => exportToCSV(mockResults.columns, mockResults.rows)}>
+                                  Export as CSV
+                                </DropdownMenuItem>
+                                <DropdownMenuItem onClick={() => exportToJSON(mockResults.columns, mockResults.rows)}>
+                                  Export as JSON
+                                </DropdownMenuItem>
+                                <DropdownMenuItem onClick={() => exportSQLToFile(generatedSQL)}>
+                                  Export SQL file
+                                </DropdownMenuItem>
+                              </DropdownMenuContent>
+                            </DropdownMenu>
                           )}
-                        </Button>
+                          <Button
+                            onClick={handleRun}
+                            disabled={!generatedSQL || isRunning}
+                            size="sm"
+                          >
+                            {isRunning ? (
+                              <RefreshCw className="w-4 h-4 animate-spin" />
+                            ) : (
+                              <>
+                                <TableIcon className="w-4 h-4 mr-2" />
+                                Generate Results
+                              </>
+                            )}
+                          </Button>
+                        </div>
                       </div>
 
                       <div className="rounded-lg border border-border min-h-[300px] overflow-auto">
-                        {mockResults ? (
+                        {isRunning ? (
+                          <div className="p-4 space-y-2">
+                            <Skeleton className="h-8 w-full" />
+                            {Array.from({ length: 5 }).map((_, i) => (
+                              <Skeleton key={i} className="h-6 w-full opacity-70" />
+                            ))}
+                          </div>
+                        ) : mockResults ? (
                           <Table>
                             <TableHeader>
                               <TableRow>
@@ -848,6 +920,7 @@ const Builder = () => {
                           modified={convertedSQL}
                           originalLabel={`Original (${dialect})`}
                           modifiedLabel={`Converted (${convertDialect})`}
+                          dialect={dialect}
                         />
                       ) : (
                         <div className="code-bg rounded-lg p-4 min-h-[300px] overflow-auto">
@@ -921,6 +994,10 @@ const Builder = () => {
                         onApplyFix={(sql) => setGeneratedSQL(sql)}
                       />
                     </TabsContent>
+
+                    <TabsContent value="cost" className="space-y-4">
+                      <DialectCostEstimator sql={generatedSQL} schema={schemaText} />
+                    </TabsContent>
                   </Tabs>
                 </Card>
               </div>
@@ -954,6 +1031,12 @@ const Builder = () => {
                 </h2>
                 <SchemaVisualizer />
               </Card>
+              {schemaText && (
+                <div className="grid md:grid-cols-2 gap-4">
+                  <SchemaDriftAnalyzer schema={schemaText} dialect={dialect} />
+                  <MigrationGenerator schema={schemaText} dialect={dialect} />
+                </div>
+              )}
             </div>
           </TabsContent>
         </Tabs>

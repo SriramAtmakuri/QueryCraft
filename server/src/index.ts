@@ -1,33 +1,158 @@
 import express from 'express';
 import cors from 'cors';
+import helmet from 'helmet';
+import rateLimit from 'express-rate-limit';
+import pinoHttp from 'pino-http';
 import dotenv from 'dotenv';
-import { PrismaClient } from '@prisma/client';
+import swaggerUi from 'swagger-ui-express';
+import * as Sentry from '@sentry/node';
 import { generateContent, extractJSON, extractJSONObject, extractJSONArray, getAvailableProvider } from './aiProvider';
+import { logger } from './logger';
+import { errorHandler } from './middleware/errorHandler';
+import { optionalAuth } from './middleware/auth';
+import { requestId } from './middleware/requestId';
+import { getCached, setCached, cacheKey, getCacheStats } from './cache';
+import authRoutes from './routes/auth';
+import historyRoutes from './routes/history';
+import databaseRoutes from './routes/database';
+import advancedRoutes from './routes/advanced';
+import reviewRoutes from './routes/reviews';
+import { swaggerSpec } from './swagger';
 
 dotenv.config();
 
-// Log which AI provider is being used
+// Sentry init (before anything else)
+if (process.env.SENTRY_DSN) {
+  Sentry.init({ dsn: process.env.SENTRY_DSN, environment: process.env.NODE_ENV || 'development' });
+}
+
+// Validate required env vars at startup
+const requiredEnv = ['JWT_SECRET', 'DATABASE_URL'];
+const missing = requiredEnv.filter(k => !process.env[k]);
+if (missing.length) {
+  logger.error({ missing }, 'Missing required environment variables');
+  process.exit(1);
+}
+
 const provider = getAvailableProvider();
 if (provider) {
-  console.log(`Using AI provider: ${provider.provider.toUpperCase()}`);
+  logger.info(`Using AI provider: ${provider.provider.toUpperCase()}`);
 } else {
-  console.warn('WARNING: No AI API key configured!');
+  logger.warn('No AI API key configured — AI features disabled');
 }
 
 const app = express();
-const prisma = new PrismaClient();
 const PORT = process.env.PORT || 3000;
 
-app.use(cors());
-app.use(express.json());
+// Security headers
+app.use(helmet({ contentSecurityPolicy: { directives: { defaultSrc: ["'self'"], scriptSrc: ["'self'", "'unsafe-inline'"], styleSrc: ["'self'", "'unsafe-inline'"], imgSrc: ["'self'", 'data:', 'blob:'], connectSrc: ["'self'", 'https://generativelanguage.googleapis.com', 'https://api.openai.com', 'https://api.anthropic.com', 'https://api.groq.com'] } } }));
 
-// Health Check
-app.get('/api/health', (req, res) => {
-    res.json({ status: 'ok', timestamp: new Date().toISOString() });
+// CORS — whitelist allowed origins
+const allowedOrigins = (process.env.ALLOWED_ORIGINS || 'http://localhost:5173').split(',').map(o => o.trim());
+app.use(cors({
+  origin: (origin, cb) => {
+    if (!origin || allowedOrigins.includes(origin)) return cb(null, true);
+    cb(new Error(`CORS: origin ${origin} not allowed`));
+  },
+  credentials: true
+}));
+
+// Request ID tracing
+app.use(requestId);
+
+// Request logging
+app.use(pinoHttp({
+  logger,
+  autoLogging: { ignore: req => req.url === '/api/health' || req.url === '/api/v1/health' },
+  customProps: (req) => ({ requestId: req.headers['x-request-id'] })
+}));
+
+// Body limits
+app.use(express.json({ limit: '2mb' }));
+app.use(express.urlencoded({ extended: false, limit: '2mb' }));
+
+// Global rate limit
+const globalLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 200,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many requests, please try again later' }
 });
 
+// Stricter limit for AI endpoints (expensive operations)
+const aiLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'AI rate limit exceeded, please wait before retrying' }
+});
+
+app.use(globalLimiter);
+
+// API docs
+app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec));
+
+// v1 router — all routes versioned
+const v1 = express.Router();
+
+// Auth routes (public)
+v1.use('/auth', authRoutes);
+
+// Query history / saved queries (protected)
+v1.use('/history', historyRoutes);
+
+// Database connections + execution (protected)
+v1.use('/db', databaseRoutes);
+
+// Advanced AI analysis (semantic diff, schema drift, migrations, dialect cost)
+v1.use('/advanced', advancedRoutes);
+
+// Collaborative query reviews (public — no auth required)
+v1.use('/reviews', reviewRoutes);
+
+// Optional auth on AI routes
+v1.use(optionalAuth);
+
+// AI-specific rate limit
+const AI_PATHS = [
+  '/explain-sql', '/convert-sql', '/optimize-sql', '/sql-to-natural',
+  '/mock-results', '/analyze-performance', '/debug-sql', '/generate-schema',
+  '/export-orm', '/image-to-schema', '/query-suggestions', '/generate-multi-sql', '/generate-sql'
+];
+v1.use(AI_PATHS, aiLimiter);
+
+// Mount v1 at both /api/v1 and /api (backwards compat)
+app.use('/api/v1', v1);
+app.use('/api', v1);
+
+// Health Check (upgraded — checks DB + AI)
+app.get('/api/health', async (_req, res) => {
+  const { PrismaClient } = await import('@prisma/client');
+  const prisma = new PrismaClient();
+  const checks: Record<string, string> = {};
+  let healthy = true;
+
+  try {
+    await prisma.$queryRaw`SELECT 1`;
+    checks.database = 'ok';
+  } catch {
+    checks.database = 'error';
+    healthy = false;
+  } finally {
+    await prisma.$disconnect().catch(() => {});
+  }
+
+  checks.ai = getAvailableProvider() ? 'configured' : 'not_configured';
+  checks.cache = `${getCacheStats().size}/${getCacheStats().maxSize} entries`;
+
+  res.status(healthy ? 200 : 503).json({ status: healthy ? 'ok' : 'degraded', timestamp: new Date().toISOString(), checks });
+});
+app.get('/api/v1/health', (_req, res) => res.redirect('/api/health'));
+
 // AI Provider Status - Check which provider is configured and test it
-app.get('/api/ai-status', async (req, res) => {
+v1.get('/ai-status', async (req, res) => {
     const providerConfig = getAvailableProvider();
 
     if (!providerConfig) {
@@ -54,35 +179,29 @@ app.get('/api/ai-status', async (req, res) => {
             message: `${providerConfig.provider.toUpperCase()} API is working correctly`,
             testResponse: result.text.substring(0, 50)
         });
-    } catch (error: any) {
+    } catch (error: unknown) {
         res.json({
             configured: true,
             provider: providerConfig.provider,
             status: 'error',
-            message: error.message || 'API key validation failed',
+            message: error instanceof Error ? error.message : 'API key validation failed',
             hint: 'Check if your API key is valid and has sufficient quota'
         });
     }
 });
 
-// Basic User Routes
-app.get('/api/users', async (req, res) => {
-    try {
-        const users = await prisma.user.findMany();
-        res.json(users);
-    } catch (error) {
-        res.status(500).json({ error: 'Failed to fetch users' });
-    }
-});
-
 // Generate SQL from natural language
-app.post('/api/generate-sql', async (req, res) => {
+v1.post('/generate-sql', async (req, res) => {
     try {
         const { prompt, schema, dialect = 'postgresql' } = req.body;
 
         if (!prompt) {
             return res.status(400).json({ error: 'Prompt is required' });
         }
+
+        const key = cacheKey('generate-sql', prompt, schema, dialect);
+        const cached = getCached<{ sql: string }>(key);
+        if (cached) return res.json({ ...cached, cached: true });
 
         const systemPrompt = `You are an expert SQL query generator. Generate optimized ${dialect.toUpperCase()} SQL queries based on user requests.
 
@@ -103,18 +222,19 @@ User request: ${prompt}`;
             maxTokens: 1024
         });
 
-        // Clean up the response - remove markdown code blocks if present
         const cleanSQL = result.text.replace(/```sql\n?/gi, '').replace(/```\n?/gi, '').trim();
-
-        res.json({ sql: cleanSQL });
-    } catch (error: any) {
-        console.error('Generate SQL error:', error);
-        res.status(500).json({ error: error.message || 'Failed to generate SQL' });
+        const response = { sql: cleanSQL };
+        setCached(key, response);
+        res.json(response);
+    } catch (error: unknown) {
+        logger.error({ err: error }, 'Generate SQL error');
+        if (process.env.SENTRY_DSN) Sentry.captureException(error);
+        res.status(500).json({ error: error instanceof Error ? error.message : 'Failed to generate SQL' });
     }
 });
 
 // Explain SQL query
-app.post('/api/explain-sql', async (req, res) => {
+v1.post('/explain-sql', async (req, res) => {
     try {
         const { sql } = req.body;
 
@@ -157,13 +277,13 @@ ${sql}`;
         if (jsonMatch) {
             try {
                 // Try to fix common JSON issues
-                let jsonStr = jsonMatch[0]
+                const jsonStr = jsonMatch[0]
                     .replace(/,\s*}/g, '}')  // Remove trailing commas before }
                     .replace(/,\s*]/g, ']'); // Remove trailing commas before ]
                 const explanation = JSON.parse(jsonStr);
                 res.json(explanation);
             } catch (parseError) {
-                console.error('JSON parse error:', parseError);
+                logger.error({ err: parseError }, 'JSON parse error:');
                 res.json({
                     summary: resultText.substring(0, 500),
                     sections: [],
@@ -180,14 +300,14 @@ ${sql}`;
                 tips: []
             });
         }
-    } catch (error: any) {
-        console.error('Explain SQL error:', error);
-        res.status(500).json({ error: error.message || 'Failed to explain SQL' });
+    } catch (error: unknown) {
+        logger.error({ err: error }, 'Explain SQL error:');
+        res.status(500).json({ error: error instanceof Error ? error.message : 'Failed to explain SQL' });
     }
 });
 
 // Convert SQL between dialects
-app.post('/api/convert-sql', async (req, res) => {
+v1.post('/convert-sql', async (req, res) => {
     try {
         const { sql, fromDialect, toDialect } = req.body;
 
@@ -204,14 +324,14 @@ app.post('/api/convert-sql', async (req, res) => {
         const cleanSQL = result.text.replace(/```sql\n?/gi, '').replace(/```\n?/gi, '').trim();
 
         res.json({ sql: cleanSQL });
-    } catch (error: any) {
-        console.error('Convert SQL error:', error);
-        res.status(500).json({ error: error.message || 'Failed to convert SQL' });
+    } catch (error: unknown) {
+        logger.error({ err: error }, 'Convert SQL error:');
+        res.status(500).json({ error: error instanceof Error ? error.message : 'Failed to convert SQL' });
     }
 });
 
 // Optimize SQL query
-app.post('/api/optimize-sql', async (req, res) => {
+v1.post('/optimize-sql', async (req, res) => {
     try {
         const { sql, schema } = req.body;
 
@@ -261,13 +381,13 @@ ${schema ? `Schema:\n${schema}\n\n` : ''}Query:\n${sql}`;
         if (jsonMatch) {
             try {
                 // Try to fix common JSON issues
-                let jsonStr = jsonMatch[0]
+                const jsonStr = jsonMatch[0]
                     .replace(/,\s*}/g, '}')  // Remove trailing commas before }
                     .replace(/,\s*]/g, ']'); // Remove trailing commas before ]
                 const optimization = JSON.parse(jsonStr);
                 res.json(optimization);
             } catch (parseError) {
-                console.error('JSON parse error:', parseError);
+                logger.error({ err: parseError }, 'JSON parse error:');
                 // Try to extract optimized query from raw text
                 const sqlMatch = resultText.match(/```sql\s*([\s\S]*?)```/i) ||
                                  resultText.match(/SELECT[\s\S]*?(?:;|$)/i);
@@ -291,14 +411,14 @@ ${schema ? `Schema:\n${schema}\n\n` : ''}Query:\n${sql}`;
                 summary: ''
             });
         }
-    } catch (error: any) {
-        console.error('Optimize SQL error:', error);
-        res.status(500).json({ error: error.message || 'Failed to optimize SQL' });
+    } catch (error: unknown) {
+        logger.error({ err: error }, 'Optimize SQL error:');
+        res.status(500).json({ error: error instanceof Error ? error.message : 'Failed to optimize SQL' });
     }
 });
 
 // Gemini API - Generate natural language from SQL (reverse engineering)
-app.post('/api/sql-to-natural', async (req, res) => {
+v1.post('/sql-to-natural', async (req, res) => {
     try {
         const { sql } = req.body;
 
@@ -339,13 +459,13 @@ app.post('/api/sql-to-natural', async (req, res) => {
         const description = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
         res.json({ description });
     } catch (error) {
-        console.error('SQL to natural error:', error);
+        logger.error({ err: error }, 'SQL to natural error:');
         res.status(500).json({ error: 'Failed to convert SQL to natural language' });
     }
 });
 
 // Gemini API - Generate mock results for SQL query
-app.post('/api/mock-results', async (req, res) => {
+v1.post('/mock-results', async (req, res) => {
     try {
         const { sql } = req.body;
 
@@ -407,13 +527,13 @@ ${sql}`
             res.status(500).json({ error: 'Failed to parse mock results' });
         }
     } catch (error) {
-        console.error('Mock results error:', error);
+        logger.error({ err: error }, 'Mock results error:');
         res.status(500).json({ error: 'Failed to generate mock results' });
     }
 });
 
 // Gemini API - Analyze query performance (simulated EXPLAIN ANALYZE)
-app.post('/api/analyze-performance', async (req, res) => {
+v1.post('/analyze-performance', async (req, res) => {
     try {
         const { sql, schema } = req.body;
 
@@ -486,13 +606,13 @@ ${schema ? `Schema:\n${schema}\n\n` : ''}Query:\n${sql}`
             res.status(500).json({ error: 'Failed to parse performance analysis' });
         }
     } catch (error) {
-        console.error('Performance analysis error:', error);
+        logger.error({ err: error }, 'Performance analysis error:');
         res.status(500).json({ error: 'Failed to analyze performance' });
     }
 });
 
 // Gemini API - Debug SQL query errors
-app.post('/api/debug-sql', async (req, res) => {
+v1.post('/debug-sql', async (req, res) => {
     try {
         const { sql, error: sqlError, schema } = req.body;
 
@@ -552,13 +672,13 @@ Error Message:\n${sqlError}`
             res.status(500).json({ error: 'Failed to parse debug response' });
         }
     } catch (error) {
-        console.error('Debug SQL error:', error);
+        logger.error({ err: error }, 'Debug SQL error:');
         res.status(500).json({ error: 'Failed to debug SQL' });
     }
 });
 
 // Gemini API - Generate schema from natural language
-app.post('/api/generate-schema', async (req, res) => {
+v1.post('/generate-schema', async (req, res) => {
     try {
         const { description } = req.body;
 
@@ -614,13 +734,13 @@ Return ONLY the SQL statements, no explanations.`
 
         res.json({ schema: cleanSchema });
     } catch (error) {
-        console.error('Generate schema error:', error);
+        logger.error({ err: error }, 'Generate schema error:');
         res.status(500).json({ error: 'Failed to generate schema' });
     }
 });
 
 // Gemini API - Export SQL to ORM code
-app.post('/api/export-orm', async (req, res) => {
+v1.post('/export-orm', async (req, res) => {
     try {
         const { sql, orm } = req.body;
 
@@ -674,13 +794,13 @@ ${sql}`
 
         res.json({ code: cleanCode });
     } catch (error) {
-        console.error('Export ORM error:', error);
+        logger.error({ err: error }, 'Export ORM error:');
         res.status(500).json({ error: 'Failed to export to ORM' });
     }
 });
 
 // Gemini API - Extract schema from image (ERD diagram)
-app.post('/api/image-to-schema', async (req, res) => {
+v1.post('/image-to-schema', async (req, res) => {
     try {
         const { image } = req.body; // Base64 encoded image
 
@@ -760,13 +880,13 @@ If the image is not a database diagram, return an error message.`
 
         res.json({ schema: cleanSchema });
     } catch (error) {
-        console.error('Image to schema error:', error);
+        logger.error({ err: error }, 'Image to schema error:');
         res.status(500).json({ error: 'Failed to extract schema from image' });
     }
 });
 
 // Query autocomplete suggestions based on schema context
-app.post('/api/query-suggestions', async (req, res) => {
+v1.post('/query-suggestions', async (req, res) => {
     try {
         const { partialQuery, schema } = req.body;
 
@@ -812,18 +932,18 @@ Consider the schema context if provided. Suggestions should be practical, common
         const data = await response.json();
 
         if (data.error) {
-            console.error('Gemini API error:', data.error);
+            logger.error({ err: data.error }, 'Gemini API error');
             return res.status(500).json({ error: data.error.message });
         }
 
         // Check if we got a valid response
         if (!data.candidates || !data.candidates[0]?.content?.parts?.[0]?.text) {
-            console.error('Empty Gemini response:', JSON.stringify(data).substring(0, 500));
+            logger.warn({ data: JSON.stringify(data).substring(0, 500) }, 'Empty Gemini response');
             return res.json({ suggestions: [] });
         }
 
         const resultText = data.candidates[0].content.parts[0].text;
-        console.log('Suggestions raw response:', resultText.substring(0, 500));
+        logger.debug('Suggestions raw response:', resultText.substring(0, 500));
         const cleanJson = resultText.replace(/```json\s*/gi, '').replace(/```\s*/g, '').trim();
 
         try {
@@ -832,7 +952,7 @@ Consider the schema context if provided. Suggestions should be practical, common
             const arrayMatch = cleanJson.match(/\[[\s\S]*\]/);
             if (arrayMatch) {
                 // Clean up common JSON issues
-                let jsonStr = arrayMatch[0]
+                const jsonStr = arrayMatch[0]
                     .replace(/,\s*]/g, ']')  // Remove trailing commas
                     .replace(/,\s*}/g, '}');
                 suggestions = JSON.parse(jsonStr);
@@ -841,21 +961,21 @@ Consider the schema context if provided. Suggestions should be practical, common
                 const parsed = JSON.parse(cleanJson);
                 suggestions = Array.isArray(parsed) ? parsed : parsed.suggestions || [];
             }
-            console.log('Parsed suggestions count:', Array.isArray(suggestions) ? suggestions.length : 0);
+            logger.debug({ count: Array.isArray(suggestions) ? suggestions.length : 0 }, 'Parsed suggestions count');
             res.json({ suggestions: Array.isArray(suggestions) ? suggestions : [] });
         } catch (parseError) {
-            console.error('Suggestions parse error:', parseError);
-            console.error('Clean JSON was:', cleanJson.substring(0, 300));
+            logger.error({ err: parseError }, 'Suggestions parse error:');
+            logger.debug({ cleanJson: cleanJson.substring(0, 300) }, 'Suggestions parse failed, raw JSON');
             res.json({ suggestions: [] });
         }
     } catch (error) {
-        console.error('Query suggestions error:', error);
+        logger.error({ err: error }, 'Query suggestions error:');
         res.status(500).json({ error: 'Failed to generate suggestions' });
     }
 });
 
 // Multi-query support - Generate multiple SQL statements from natural language
-app.post('/api/generate-multi-sql', async (req, res) => {
+v1.post('/generate-multi-sql', async (req, res) => {
     try {
         const { prompt, schema, dialect = 'postgresql' } = req.body;
 
@@ -924,11 +1044,29 @@ Return ONLY the JSON array, no markdown or explanations. Ensure queries are in t
             });
         }
     } catch (error) {
-        console.error('Multi-query generation error:', error);
+        logger.error({ err: error }, 'Multi-query generation error:');
         res.status(500).json({ error: 'Failed to generate queries' });
     }
 });
 
-app.listen(PORT, () => {
-    console.log(`Server running on http://localhost:${PORT}`);
+// Global error handler — must be last
+app.use(errorHandler);
+
+const server = app.listen(PORT, () => {
+  logger.info(`Server running on http://localhost:${PORT}`);
 });
+
+// Graceful shutdown
+function shutdown(signal: string) {
+  logger.info(`${signal} received — shutting down`);
+  server.close(async () => {
+    logger.info('HTTP server closed');
+    process.exit(0);
+  });
+  setTimeout(() => process.exit(1), 10_000);
+}
+
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));
+process.on('uncaughtException', (err) => { logger.error({ err }, 'Uncaught exception'); process.exit(1); });
+process.on('unhandledRejection', (reason) => { logger.error({ reason }, 'Unhandled rejection'); });

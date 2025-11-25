@@ -67,8 +67,11 @@ export const lintSQL = (sql: string): LintIssue[] => {
     });
   }
 
-  // Check for unbalanced quotes (accounting for escaped quotes '')
-  const sqlWithoutEscapedQuotes = sql.replace(/''/g, ''); // Remove escaped quotes
+  // Check for unbalanced quotes (accounting for escaped quotes '' and comments)
+  const sqlWithoutComments = sql
+    .replace(/--.*$/gm, '') // Remove single-line comments
+    .replace(/\/\*[\s\S]*?\*\//g, ''); // Remove multi-line comments
+  const sqlWithoutEscapedQuotes = sqlWithoutComments.replace(/''/g, ''); // Remove escaped quotes
   const singleQuotes = (sqlWithoutEscapedQuotes.match(/'/g) || []).length;
   if (singleQuotes % 2 !== 0) {
     issues.push({

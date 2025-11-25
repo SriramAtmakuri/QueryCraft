@@ -240,6 +240,7 @@ export const VisualQueryBuilder = () => {
           setNodes((nds) =>
             nds.map((node) => {
               if (node.id === `table-${currentNodeId}`) {
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
                 const selected = (node.data as any).selectedColumns as string[];
                 return {
                   ...node,
@@ -358,6 +359,7 @@ export const VisualQueryBuilder = () => {
 
     // Collect selected columns
     const selectedColumns = tableNodes.flatMap((n) => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const data = n.data as any;
       return (data.selectedColumns as string[]).map(col => `${data.label}.${col}`);
     });
@@ -365,11 +367,13 @@ export const VisualQueryBuilder = () => {
     if (selectedColumns.length === 0) return '';
 
     // Build FROM clause
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const tables = tableNodes.map((n) => (n.data as any).label);
     let fromClause = tables[0];
 
     // Add JOINs
     joinNodes.forEach((n) => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const data = n.data as any;
       if (data.leftTable && data.rightTable && data.leftColumn && data.rightColumn) {
         fromClause += `\n${data.joinType} ${data.rightTable} ON ${data.leftTable}.${data.leftColumn} = ${data.rightTable}.${data.rightColumn}`;
@@ -379,6 +383,7 @@ export const VisualQueryBuilder = () => {
     // Build WHERE clause
     const conditions = filterNodes
       .map((n) => {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const data = n.data as any;
         if (!data.column) return null;
 

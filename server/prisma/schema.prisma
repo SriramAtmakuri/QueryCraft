@@ -3,41 +3,128 @@ generator client {
 }
 
 datasource db {
-  provider = "postgresql"
+  provider = "sqlite"
   url      = env("DATABASE_URL")
 }
 
 model User {
+  id           String   @id @default(uuid())
+  email        String   @unique
+  name         String?
+  passwordHash String?
+  theme        String?  @default("system")
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  queries        SavedQuery[]
+  history        QueryHistory[]
+  connections    DatabaseConnection[]
+  refreshTokens  RefreshToken[]
+  resetTokens    PasswordResetToken[]
+  auditLogs      AuditLog[]
+}
+
+model RefreshToken {
   id        String   @id @default(uuid())
-  email     String   @unique
-  name      String?
+  token     String   @unique
+  expiresAt DateTime
   createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-  
-  queries     SavedQuery[]
-  connections DatabaseConnection[]
+  revoked   Boolean  @default(false)
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([token])
+  @@index([userId])
+}
+
+model PasswordResetToken {
+  id        String   @id @default(uuid())
+  token     String   @unique
+  expiresAt DateTime
+  used      Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([token])
+}
+
+model QueryHistory {
+  id        String   @id @default(uuid())
+  prompt    String
+  sql       String
+  dialect   String   @default("postgresql")
+  createdAt DateTime @default(now())
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt(sort: Desc)])
 }
 
 model SavedQuery {
   id                  String   @id @default(uuid())
   name                String
   sqlQuery            String
-  visualizationConfig String?  // JSON string for chart config
+  visualizationConfig String?
   createdAt           DateTime @default(now())
   updatedAt           DateTime @updatedAt
-  
+
   userId String
-  user   User   @relation(fields: [userId], references: [id])
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
 
 model DatabaseConnection {
   id               String   @id @default(uuid())
   name             String
-  type             String   // e.g., "postgres", "mysql", "sqlite"
+  type             String
   connectionString String
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
-  
+
   userId String
-  user   User   @relation(fields: [userId], references: [id])
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model AuditLog {
+  id        String   @id @default(uuid())
+  action    String
+  resource  String
+  details   String?
+  ip        String?
+  createdAt DateTime @default(now())
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt(sort: Desc)])
+}
+
+model SharedQuery {
+  id        String   @id @default(cuid())
+  query     String?
+  sql       String
+  dialect   String   @default("postgresql")
+  schema    String?
+  createdAt DateTime @default(now())
+
+  reviews QueryReview[]
+
+  @@index([createdAt(sort: Desc)])
+}
+
+model QueryReview {
+  id        String   @id @default(uuid())
+  lineStart Int
+  lineEnd   Int
+  comment   String
+  author    String   @default("Anonymous")
+  createdAt DateTime @default(now())
+
+  shareId     String
+  sharedQuery SharedQuery @relation(fields: [shareId], references: [id], onDelete: Cascade)
+
+  @@index([shareId])
 }

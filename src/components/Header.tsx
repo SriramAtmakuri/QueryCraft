@@ -1,43 +1,73 @@
+import { useState } from "react";
 import { Button } from "@/components/ui/button";
-import { Database, Home, Wrench } from "lucide-react";
+import { Database, Home, Wrench, LogIn, LogOut, User, Settings } from "lucide-react";
 import { useNavigate, useLocation } from "react-router-dom";
+import { useAuth } from "@/context/AuthContext";
+import { AuthModal } from "@/components/AuthModal";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 
 export const Header = () => {
   const navigate = useNavigate();
   const location = useLocation();
+  const { user, logout, isLoading } = useAuth();
+  const [authOpen, setAuthOpen] = useState(false);
+
+  const handleLogout = async () => { await logout(); navigate('/'); };
 
   return (
     <header className="border-b border-border bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
       <div className="container mx-auto px-4 py-3">
         <div className="flex items-center justify-between">
-          <div
-            className="flex items-center gap-2 cursor-pointer"
-            onClick={() => navigate('/')}
-          >
+          <div className="flex items-center gap-2 cursor-pointer" onClick={() => navigate('/')}>
             <Database className="w-6 h-6 text-primary" />
             <span className="text-xl font-bold">QueryCraft</span>
           </div>
 
           <nav className="flex items-center gap-2">
-            <Button
-              variant={location.pathname === '/' ? 'default' : 'ghost'}
-              size="sm"
-              onClick={() => navigate('/')}
-            >
-              <Home className="w-4 h-4 mr-2" />
-              Home
+            <Button variant={location.pathname === '/' ? 'default' : 'ghost'} size="sm" onClick={() => navigate('/')}>
+              <Home className="w-4 h-4 mr-2" />Home
             </Button>
-            <Button
-              variant={location.pathname === '/builder' ? 'default' : 'ghost'}
-              size="sm"
-              onClick={() => navigate('/builder')}
-            >
-              <Wrench className="w-4 h-4 mr-2" />
-              Builder
+            <Button variant={location.pathname === '/builder' ? 'default' : 'ghost'} size="sm" onClick={() => navigate('/builder')}>
+              <Wrench className="w-4 h-4 mr-2" />Builder
             </Button>
+
+            {!isLoading && (
+              user ? (
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button variant="outline" size="sm" className="gap-2">
+                      <User className="w-4 h-4" />
+                      {user.name || user.email.split('@')[0]}
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end">
+                    <DropdownMenuItem disabled className="text-xs text-muted-foreground">{user.email}</DropdownMenuItem>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem onClick={() => navigate('/profile')}>
+                      <Settings className="w-4 h-4 mr-2" />Profile & settings
+                    </DropdownMenuItem>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem onClick={handleLogout} className="text-destructive">
+                      <LogOut className="w-4 h-4 mr-2" />Sign out
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              ) : (
+                <Button size="sm" variant="outline" onClick={() => setAuthOpen(true)}>
+                  <LogIn className="w-4 h-4 mr-2" />Sign in
+                </Button>
+              )
+            )}
           </nav>
         </div>
       </div>
+      <AuthModal open={authOpen} onOpenChange={setAuthOpen} />
     </header>
   );
 };
