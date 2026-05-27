@@ -205,11 +205,31 @@ const nodeTypes = {
   joinNode: JoinNode,
 };
 
+const VB_STORAGE_KEY = 'qc_visual_builder_state';
+
+function stripCallbacks(node: Node): Record<string, unknown> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const d = node.data as any;
+  if (node.type === 'tableNode') return { label: d.label, columns: d.columns, selectedColumns: d.selectedColumns };
+  if (node.type === 'filterNode') return { column: d.column, operator: d.operator, value: d.value };
+  if (node.type === 'joinNode') return { leftTable: d.leftTable, leftColumn: d.leftColumn, rightTable: d.rightTable, rightColumn: d.rightColumn, joinType: d.joinType };
+  return d;
+}
+
+function loadSavedState(): { nodes: Node[]; edges: Edge[]; nodeId: number } | null {
+  try {
+    const raw = localStorage.getItem(VB_STORAGE_KEY);
+    if (!raw) return null;
+    return JSON.parse(raw);
+  } catch { return null; }
+}
+
 export const VisualQueryBuilder = () => {
   const [nodes, setNodes, onNodesChange] = useNodesState([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState([]);
   const [nodeId, setNodeId] = useState(0);
   const [generatedSQL, setGeneratedSQL] = useState('');
+  const [restored, setRestored] = useState(false);
   const { schema } = useSchema();
 
   const onConnect = useCallback(
@@ -222,6 +242,64 @@ export const VisualQueryBuilder = () => {
     const table = schema.tables.find(t => t.name === tableName);
     return table ? table.columns.map(c => c.name) : ['id', 'name', 'email', 'created_at'];
   };
+
+  // Reattach callbacks to a deserialized node
+  const reattachCallbacks = useCallback((node: Node): Node => {
+    const id = node.id;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const d = node.data as any;
+    if (node.type === 'tableNode') {
+      return {
+        ...node, data: {
+          ...d,
+          onColumnToggle: (column: string) => setNodes(nds => nds.map(n => n.id === id ? {
+            ...n, data: {
+              ...n.data,
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              selectedColumns: (n.data as any).selectedColumns.includes(column)
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                ? (n.data as any).selectedColumns.filter((c: string) => c !== column)
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                : [...(n.data as any).selectedColumns, column],
+            }
+          } : n)),
+          onLabelChange: (label: string) => {
+            const newColumns = getDefaultColumns(label);
+            setNodes(nds => nds.map(n => n.id === id ? { ...n, data: { ...n.data, label, columns: newColumns, selectedColumns: newColumns.slice(0, 2) } } : n));
+          },
+        }
+      };
+    }
+    if (node.type === 'filterNode') {
+      return { ...node, data: { ...d, onUpdate: (field: string, value: string) => setNodes(nds => nds.map(n => n.id === id ? { ...n, data: { ...n.data, [field]: value } } : n)) } };
+    }
+    if (node.type === 'joinNode') {
+      return { ...node, data: { ...d, onUpdate: (field: string, value: string) => setNodes(nds => nds.map(n => n.id === id ? { ...n, data: { ...n.data, [field]: value } } : n)) } };
+    }
+    return node;
+  }, [setNodes, getDefaultColumns]);
+
+  // Restore saved state on mount
+  useEffect(() => {
+    if (restored) return;
+    setRestored(true);
+    const saved = loadSavedState();
+    if (!saved) return;
+    setEdges(saved.edges);
+    setNodeId(saved.nodeId);
+    setNodes(saved.nodes.map(reattachCallbacks));
+  }, [restored, reattachCallbacks, setNodes, setEdges]);
+
+  // Persist state on every change (debounced via React batch)
+  useEffect(() => {
+    if (!restored) return;
+    const serializable = {
+      nodes: nodes.map(n => ({ ...n, data: stripCallbacks(n) })),
+      edges,
+      nodeId,
+    };
+    localStorage.setItem(VB_STORAGE_KEY, JSON.stringify(serializable));
+  }, [nodes, edges, nodeId, restored]);
 
   const addTableNode = () => {
     const defaultTable = schema.tables.length > 0 ? schema.tables[0].name : 'users';
@@ -348,6 +426,7 @@ export const VisualQueryBuilder = () => {
     setEdges([]);
     setNodeId(0);
     setGeneratedSQL('');
+    localStorage.removeItem(VB_STORAGE_KEY);
   };
 
   const generateSQL = useCallback(() => {

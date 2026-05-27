@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react';
+import { AIFeedback } from '@/components/AIFeedback';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -235,6 +236,11 @@ export const SQLDiff = ({
                 <p className="text-xs text-muted-foreground">{semanticResult.recommendation}</p>
               </div>
             )}
+            <AIFeedback
+              feature="semantic-diff"
+              inputSummary={`${original.slice(0, 100)} vs ${modified.slice(0, 100)}`}
+              outputSummary={`equivalent=${semanticResult.isEquivalent} confidence=${semanticResult.confidence}`}
+            />
           </div>
         ) : (
           <p className="text-sm text-muted-foreground">

@@ -1,6 +1,7 @@
 export interface AIProviderConfig {
-  provider: 'gemini' | 'openai' | 'anthropic' | 'groq';
+  provider: 'gemini' | 'openai' | 'anthropic' | 'groq' | 'ollama';
   apiKey: string;
+  baseUrl?: string;
 }
 
 export interface AIRequestOptions {
@@ -15,9 +16,14 @@ export interface AIResponse {
 }
 
 const AI_TIMEOUT_MS = 30_000;
+const OLLAMA_TIMEOUT_MS = parseInt(process.env.OLLAMA_TIMEOUT_MS || '120000', 10);
 const MAX_RETRIES = 2;
 
 export function getAvailableProvider(): AIProviderConfig | null {
+  if (process.env.OLLAMA_MODEL) {
+    const baseUrl = process.env.OLLAMA_BASE_URL || 'http://localhost:11434';
+    return { provider: 'ollama', apiKey: '', baseUrl };
+  }
   if (process.env.GEMINI_API_KEY) return { provider: 'gemini', apiKey: process.env.GEMINI_API_KEY };
   if (process.env.OPENAI_API_KEY) return { provider: 'openai', apiKey: process.env.OPENAI_API_KEY };
   if (process.env.ANTHROPIC_API_KEY) return { provider: 'anthropic', apiKey: process.env.ANTHROPIC_API_KEY };
@@ -25,9 +31,9 @@ export function getAvailableProvider(): AIProviderConfig | null {
   return null;
 }
 
-async function fetchWithTimeout(url: string, options: RequestInit): Promise<Response> {
+async function fetchWithTimeout(url: string, options: RequestInit, timeoutMs = AI_TIMEOUT_MS): Promise<Response> {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), AI_TIMEOUT_MS);
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     return await fetch(url, { ...options, signal: controller.signal });
   } finally {
@@ -51,17 +57,45 @@ async function withRetry<T>(fn: () => Promise<T>, retries = MAX_RETRIES): Promis
 export async function generateContent(options: AIRequestOptions): Promise<AIResponse> {
   const config = getAvailableProvider();
   if (!config) {
-    throw new Error('No AI API key configured. Set GEMINI_API_KEY, OPENAI_API_KEY, ANTHROPIC_API_KEY, or GROQ_API_KEY');
+    throw new Error('No AI provider configured. Set at least one provider key in server/.env — see .env.example for options.');
   }
 
   const callers: Record<string, () => Promise<AIResponse>> = {
+    ollama: () => callOllama(config.baseUrl || 'http://localhost:11434', options),
     gemini: () => callGemini(config.apiKey, options),
     openai: () => callOpenAI(config.apiKey, options),
     anthropic: () => callAnthropic(config.apiKey, options),
-    groq: () => callGroq(config.apiKey, options)
+    groq: () => callGroq(config.apiKey, options),
   };
 
   return withRetry(callers[config.provider]);
+}
+
+async function callOllama(baseUrl: string, options: AIRequestOptions): Promise<AIResponse> {
+  const model = process.env.OLLAMA_MODEL || 'llama3.2';
+  const response = await fetchWithTimeout(`${baseUrl}/api/chat`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model,
+      messages: [{ role: 'user', content: options.prompt }],
+      stream: false,
+      options: {
+        temperature: options.temperature ?? 0.3,
+        num_predict: options.maxTokens ?? 2048,
+      },
+    }),
+  }, OLLAMA_TIMEOUT_MS);
+
+  if (!response.ok) {
+    const text = await response.text().catch(() => response.statusText);
+    throw new Error(`Ollama error ${response.status}: ${text}`);
+  }
+
+  const data = await response.json();
+  const text = data.message?.content || data.response || '';
+  if (!text) throw new Error('Ollama returned empty response');
+  return { text, provider: `ollama:${model}` };
 }
 
 async function callGemini(apiKey: string, options: AIRequestOptions): Promise<AIResponse> {
@@ -136,22 +170,20 @@ export function extractJSON(text: string): string {
   return text.replace(/```json\s*/gi, '').replace(/```\s*/g, '').trim();
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-export function extractJSONObject(text: string): any {
+export function extractJSONObject(text: string): Record<string, unknown> {
   const cleaned = extractJSON(text);
   const match = cleaned.match(/\{[\s\S]*\}/);
   if (match) {
-    return JSON.parse(match[0].replace(/,\s*}/g, '}').replace(/,\s*]/g, ']'));
+    return JSON.parse(match[0].replace(/,\s*}/g, '}').replace(/,\s*]/g, ']')) as Record<string, unknown>;
   }
   throw new Error('No JSON object found in response');
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-export function extractJSONArray(text: string): any[] {
+export function extractJSONArray(text: string): unknown[] {
   const cleaned = extractJSON(text);
   const match = cleaned.match(/\[[\s\S]*\]/);
   if (match) {
-    return JSON.parse(match[0].replace(/,\s*}/g, '}').replace(/,\s*]/g, ']'));
+    return JSON.parse(match[0].replace(/,\s*}/g, '}').replace(/,\s*]/g, ']')) as unknown[];
   }
   throw new Error('No JSON array found in response');
 }

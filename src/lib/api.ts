@@ -320,4 +320,117 @@ export const api = {
   async deleteReview(commentId: string) {
     await fetch(`${API_BASE}/api/reviews/comments/${commentId}`, { method: 'DELETE' });
   },
+
+  // Database connections (requires auth)
+  async getConnections() {
+    return (await apiFetch(`${API_BASE}/api/db`)).json();
+  },
+
+  async addConnection(name: string, type: string, connectionString: string) {
+    return (await apiFetch(`${API_BASE}/api/db`, {
+      method: 'POST',
+      body: JSON.stringify({ name, type, connectionString }),
+    })).json();
+  },
+
+  async deleteConnection(id: string) {
+    await apiFetch(`${API_BASE}/api/db/${id}`, { method: 'DELETE' });
+  },
+
+  async executeQuery(connectionId: string, sql: string) {
+    return (await apiFetch(`${API_BASE}/api/db/execute`, {
+      method: 'POST',
+      body: JSON.stringify({ connectionId, sql }),
+    })).json();
+  },
+
+  async explainQuery(connectionId: string, sql: string) {
+    return (await apiFetch(`${API_BASE}/api/db/explain`, {
+      method: 'POST',
+      body: JSON.stringify({ connectionId, sql }),
+    })).json();
+  },
+
+  // AI feedback (thumbs up/down on AI feature results)
+  async submitFeedback(feature: string, rating: 1 | -1, inputSummary: string, outputSummary: string) {
+    return (await apiFetch(`${API_BASE}/api/feedback`, {
+      method: 'POST',
+      body: JSON.stringify({ feature, rating, inputSummary, outputSummary }),
+    })).json();
+  },
+
+  // Blast Radius Analyzer
+  async blastRadius(schemaChange: string, savedQueries: string[], dialect = 'postgresql') {
+    return (await fetch(`${API_BASE}/api/advanced/blast-radius`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ schemaChange, savedQueries, dialect }),
+    }).then(r => r.ok ? r.json() : r.json().then((e: { error: string }) => { throw new Error(e.error); })));
+  },
+
+  // Anomaly Detection
+  async anomalyDetect(sql: string, queryHistory: string[], dialect = 'postgresql') {
+    return (await fetch(`${API_BASE}/api/advanced/anomaly-detect`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sql, queryHistory, dialect }),
+    }).then(r => r.ok ? r.json() : r.json().then((e: { error: string }) => { throw new Error(e.error); })));
+  },
+
+  // Schema Recommendations
+  async schemaRecommend(schema: string, queries: string[], dialect = 'postgresql') {
+    return (await fetch(`${API_BASE}/api/advanced/schema-recommend`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ schema, queries, dialect }),
+    }).then(r => r.ok ? r.json() : r.json().then((e: { error: string }) => { throw new Error(e.error); })));
+  },
+
+  // Query Fingerprinting
+  async fingerprintSQL(sql: string) {
+    return (await fetch(`${API_BASE}/api/advanced/fingerprint`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sql }),
+    }).then(r => r.ok ? r.json() : r.json().then((e: { error: string }) => { throw new Error(e.error); })));
+  },
+
+  // Assertion Compiler
+  async compileAssertions(sql: string, assertions: string[], dialect = 'postgresql') {
+    return (await fetch(`${API_BASE}/api/advanced/compile-assertions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sql, assertions, dialect }),
+    }).then(r => r.ok ? r.json() : r.json().then((e: { error: string }) => { throw new Error(e.error); })));
+  },
+
+  // Budget Enforcer
+  async budgetCheck(sql: string, maxCostUnits: number, schema?: string, dialect = 'postgresql') {
+    return (await fetch(`${API_BASE}/api/advanced/budget-check`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sql, maxCostUnits, schema, dialect }),
+    }).then(r => r.ok ? r.json() : r.json().then((e: { error: string }) => { throw new Error(e.error); })));
+  },
+
+  // Query Versions (Time Machine + Changelog)
+  async saveVersion(queryName: string, sql: string, note?: string) {
+    return (await fetch(`${API_BASE}/api/versions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ queryName, sql, note }),
+    }).then(r => r.ok ? r.json() : r.json().then((e: { error: string }) => { throw new Error(e.error); })));
+  },
+
+  async getVersions(queryName: string) {
+    return (await fetch(`${API_BASE}/api/versions/${encodeURIComponent(queryName)}`).then(r => r.ok ? r.json() : r.json().then((e: { error: string }) => { throw new Error(e.error); })));
+  },
+
+  async diffVersions(sql1: string, sql2: string, dialect = 'postgresql', label1?: string, label2?: string) {
+    return (await fetch(`${API_BASE}/api/versions/diff`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sql1, sql2, dialect, label1, label2 }),
+    }).then(r => r.ok ? r.json() : r.json().then((e: { error: string }) => { throw new Error(e.error); })));
+  },
 };

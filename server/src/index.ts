@@ -17,9 +17,19 @@ import historyRoutes from './routes/history';
 import databaseRoutes from './routes/database';
 import advancedRoutes from './routes/advanced';
 import reviewRoutes from './routes/reviews';
+import feedbackRoutes from './routes/feedback';
+import versionsRoutes from './routes/versions';
 import { swaggerSpec } from './swagger';
 
 dotenv.config();
+
+// In-memory metrics counters
+const metrics = {
+  startedAt: Date.now(),
+  requests: { total: 0, errors: 0 },
+  ai: { calls: 0, cacheHits: 0 },
+  endpoints: {} as Record<string, number>,
+};
 
 // Sentry init (before anything else)
 if (process.env.SENTRY_DSN) {
@@ -59,6 +69,14 @@ app.use(cors({
 
 // Request ID tracing
 app.use(requestId);
+
+// Metrics counting middleware
+app.use((req, _res, next) => {
+  metrics.requests.total++;
+  const key = `${req.method} ${req.path}`;
+  metrics.endpoints[key] = (metrics.endpoints[key] ?? 0) + 1;
+  next();
+});
 
 // Request logging
 app.use(pinoHttp({
@@ -112,6 +130,10 @@ v1.use('/advanced', advancedRoutes);
 // Collaborative query reviews (public — no auth required)
 v1.use('/reviews', reviewRoutes);
 
+// AI feature feedback / eval
+v1.use('/feedback', feedbackRoutes);
+v1.use('/versions', versionsRoutes);
+
 // Optional auth on AI routes
 v1.use(optionalAuth);
 
@@ -150,6 +172,48 @@ app.get('/api/health', async (_req, res) => {
   res.status(healthy ? 200 : 503).json({ status: healthy ? 'ok' : 'degraded', timestamp: new Date().toISOString(), checks });
 });
 app.get('/api/v1/health', (_req, res) => res.redirect('/api/health'));
+
+// Metrics endpoint — operational stats without exposing sensitive internals
+app.get('/api/metrics', (_req, res) => {
+  const uptimeMs = Date.now() - metrics.startedAt;
+  const cacheStats = getCacheStats();
+  const topEndpoints = Object.entries(metrics.endpoints)
+    .sort(([, a], [, b]) => b - a)
+    .slice(0, 10)
+    .map(([path, count]) => ({ path, count }));
+
+  res.json({
+    uptime: {
+      ms: uptimeMs,
+      seconds: Math.floor(uptimeMs / 1000),
+      human: `${Math.floor(uptimeMs / 3600000)}h ${Math.floor((uptimeMs % 3600000) / 60000)}m`,
+    },
+    requests: {
+      total: metrics.requests.total,
+      errors: metrics.requests.errors,
+      errorRate: metrics.requests.total > 0
+        ? `${((metrics.requests.errors / metrics.requests.total) * 100).toFixed(1)}%`
+        : '0.0%',
+    },
+    ai: {
+      calls: metrics.ai.calls,
+      cacheHits: metrics.ai.cacheHits,
+      cacheHitRate: metrics.ai.calls > 0
+        ? `${((metrics.ai.cacheHits / (metrics.ai.calls + metrics.ai.cacheHits)) * 100).toFixed(1)}%`
+        : '0.0%',
+    },
+    cache: {
+      size: cacheStats.size,
+      maxSize: cacheStats.maxSize,
+      utilizationPct: `${Math.round((cacheStats.size / cacheStats.maxSize) * 100)}%`,
+    },
+    topEndpoints,
+    provider: getAvailableProvider()?.provider ?? null,
+    nodeVersion: process.version,
+    environment: process.env.NODE_ENV ?? 'development',
+  });
+});
+app.get('/api/v1/metrics', (_req, res) => res.redirect('/api/metrics'));
 
 // AI Provider Status - Check which provider is configured and test it
 v1.get('/ai-status', async (req, res) => {
@@ -417,7 +481,7 @@ ${schema ? `Schema:\n${schema}\n\n` : ''}Query:\n${sql}`;
     }
 });
 
-// Gemini API - Generate natural language from SQL (reverse engineering)
+// Generate natural language from SQL (reverse engineering)
 v1.post('/sql-to-natural', async (req, res) => {
     try {
         const { sql } = req.body;
@@ -428,7 +492,7 @@ v1.post('/sql-to-natural', async (req, res) => {
 
         const apiKey = process.env.GEMINI_API_KEY;
         if (!apiKey) {
-            return res.status(500).json({ error: 'Gemini API key not configured' });
+            return res.status(500).json({ error: 'AI provider not configured' });
         }
 
         const response = await fetch(
@@ -464,7 +528,7 @@ v1.post('/sql-to-natural', async (req, res) => {
     }
 });
 
-// Gemini API - Generate mock results for SQL query
+// Generate mock results for SQL query
 v1.post('/mock-results', async (req, res) => {
     try {
         const { sql } = req.body;
@@ -475,7 +539,7 @@ v1.post('/mock-results', async (req, res) => {
 
         const apiKey = process.env.GEMINI_API_KEY;
         if (!apiKey) {
-            return res.status(500).json({ error: 'Gemini API key not configured' });
+            return res.status(500).json({ error: 'AI provider not configured' });
         }
 
         const response = await fetch(
@@ -532,7 +596,7 @@ ${sql}`
     }
 });
 
-// Gemini API - Analyze query performance (simulated EXPLAIN ANALYZE)
+// Analyze query performance (simulated EXPLAIN ANALYZE)
 v1.post('/analyze-performance', async (req, res) => {
     try {
         const { sql, schema } = req.body;
@@ -543,7 +607,7 @@ v1.post('/analyze-performance', async (req, res) => {
 
         const apiKey = process.env.GEMINI_API_KEY;
         if (!apiKey) {
-            return res.status(500).json({ error: 'Gemini API key not configured' });
+            return res.status(500).json({ error: 'AI provider not configured' });
         }
 
         const response = await fetch(
@@ -611,7 +675,7 @@ ${schema ? `Schema:\n${schema}\n\n` : ''}Query:\n${sql}`
     }
 });
 
-// Gemini API - Debug SQL query errors
+// Debug SQL query errors
 v1.post('/debug-sql', async (req, res) => {
     try {
         const { sql, error: sqlError, schema } = req.body;
@@ -622,7 +686,7 @@ v1.post('/debug-sql', async (req, res) => {
 
         const apiKey = process.env.GEMINI_API_KEY;
         if (!apiKey) {
-            return res.status(500).json({ error: 'Gemini API key not configured' });
+            return res.status(500).json({ error: 'AI provider not configured' });
         }
 
         const response = await fetch(
@@ -677,7 +741,7 @@ Error Message:\n${sqlError}`
     }
 });
 
-// Gemini API - Generate schema from natural language
+// Generate schema from natural language
 v1.post('/generate-schema', async (req, res) => {
     try {
         const { description } = req.body;
@@ -688,7 +752,7 @@ v1.post('/generate-schema', async (req, res) => {
 
         const apiKey = process.env.GEMINI_API_KEY;
         if (!apiKey) {
-            return res.status(500).json({ error: 'Gemini API key not configured' });
+            return res.status(500).json({ error: 'AI provider not configured' });
         }
 
         const response = await fetch(
@@ -739,7 +803,7 @@ Return ONLY the SQL statements, no explanations.`
     }
 });
 
-// Gemini API - Export SQL to ORM code
+// Export SQL to ORM code
 v1.post('/export-orm', async (req, res) => {
     try {
         const { sql, orm } = req.body;
@@ -750,7 +814,7 @@ v1.post('/export-orm', async (req, res) => {
 
         const apiKey = process.env.GEMINI_API_KEY;
         if (!apiKey) {
-            return res.status(500).json({ error: 'Gemini API key not configured' });
+            return res.status(500).json({ error: 'AI provider not configured' });
         }
 
         const ormInstructions: Record<string, string> = {
@@ -799,7 +863,7 @@ ${sql}`
     }
 });
 
-// Gemini API - Extract schema from image (ERD diagram)
+// Extract schema from image (ERD diagram)
 v1.post('/image-to-schema', async (req, res) => {
     try {
         const { image } = req.body; // Base64 encoded image
@@ -810,7 +874,7 @@ v1.post('/image-to-schema', async (req, res) => {
 
         const apiKey = process.env.GEMINI_API_KEY;
         if (!apiKey) {
-            return res.status(500).json({ error: 'Gemini API key not configured' });
+            return res.status(500).json({ error: 'AI provider not configured' });
         }
 
         // Extract base64 data and mime type
@@ -896,7 +960,7 @@ v1.post('/query-suggestions', async (req, res) => {
 
         const apiKey = process.env.GEMINI_API_KEY;
         if (!apiKey) {
-            return res.status(500).json({ error: 'Gemini API key not configured' });
+            return res.status(500).json({ error: 'AI provider not configured' });
         }
 
         const response = await fetch(
@@ -932,13 +996,13 @@ Consider the schema context if provided. Suggestions should be practical, common
         const data = await response.json();
 
         if (data.error) {
-            logger.error({ err: data.error }, 'Gemini API error');
+            logger.error({ err: data.error }, 'AI provider error');
             return res.status(500).json({ error: data.error.message });
         }
 
         // Check if we got a valid response
         if (!data.candidates || !data.candidates[0]?.content?.parts?.[0]?.text) {
-            logger.warn({ data: JSON.stringify(data).substring(0, 500) }, 'Empty Gemini response');
+            logger.warn({ data: JSON.stringify(data).substring(0, 500) }, 'Empty AI provider response');
             return res.json({ suggestions: [] });
         }
 
@@ -985,7 +1049,7 @@ v1.post('/generate-multi-sql', async (req, res) => {
 
         const apiKey = process.env.GEMINI_API_KEY;
         if (!apiKey) {
-            return res.status(500).json({ error: 'Gemini API key not configured' });
+            return res.status(500).json({ error: 'AI provider not configured' });
         }
 
         const response = await fetch(

@@ -1,162 +1,333 @@
 # QueryCraft
 
-> AI-Powered SQL Query Builder with Natural Language Processing
+> AI-powered SQL query builder with natural language processing and advanced query analysis.
 
-QueryCraft is a modern web application that transforms natural language into optimized SQL queries using AI. It provides a comprehensive suite of tools for database developers, analysts, and anyone working with SQL databases.
+**Live Demo**: [querycraft-app.web.app](https://querycraft-app.web.app)
 
-**Live Demo**: [https://querycraft-app.web.app](https://querycraft-app.web.app)
+---
 
-## 🌟 Features
+![QueryCraft Demo](querycraft-demo.gif)
 
-### Core Capabilities
+---
 
-#### 🤖 AI-Powered Query Generation
-- Convert plain English descriptions into optimized SQL queries
-- Support for complex queries including joins, subqueries, and aggregations
-- Multi-dialect support (PostgreSQL, MySQL, SQLite, MongoDB)
-- Intelligent query suggestions based on schema context
+## Features
 
-#### 📊 Visual Query Builder
-- Drag-and-drop interface for building queries
-- Interactive table and column selection
-- Visual join configuration
-- Real-time query preview
+### Natural Language → SQL
+- Describe queries in plain English; QueryCraft generates optimized SQL
+- Multi-dialect support: PostgreSQL, MySQL, SQLite, SQL Server
+- Multi-query mode for complex transactional operations
+- Schema-aware generation when a schema is loaded
 
-#### 🔍 SQL Analysis & Optimization
-- **Query Explanation**: Detailed breakdown of SQL queries with section-by-section analysis
-- **Performance Optimization**: AI-powered suggestions for query improvements
-- **SQL Linting**: Real-time syntax checking and best practice recommendations
-- **Query Debugging**: Intelligent error detection and fix suggestions
+### Query Analysis
+| Panel | What it does |
+|---|---|
+| **Explain** | Section-by-section breakdown in plain English |
+| **Optimize** | Rewrites query + suggests indexes, shows diff |
+| **Debug** | Detects errors, explains root cause, suggests fix |
+| **Performance** | Execution plan simulation, cost estimate, bottlenecks |
+| **Lint** | Real-time syntax and best-practice checking |
 
-#### 🔄 Dialect Conversion
-- Convert SQL between different database dialects
-- Support for PostgreSQL, MySQL, SQLite, and MongoDB
-- Side-by-side diff view with syntax highlighting
-- Preserve query logic while adapting to target dialect syntax
+### Advanced Analysis
+| Panel | What it does |
+|---|---|
+| **Dialect Cost** | Side-by-side cost comparison across all 4 dialects |
+| **Blast Radius** | Impact analysis when schema changes affect saved queries |
+| **Anomaly Detect** | Flags queries that deviate from historical patterns |
+| **Budget Enforcer** | Checks query cost against a configurable unit budget |
+| **Fingerprint** | Normalizes and deduplicates structurally similar queries |
+| **Assertion Tester** | Compiles natural-language constraints into SQL CHECKs |
+| **Time Machine** | Versioned query history with rollback |
+| **Changelog** | Semantic diff between two query versions |
+| **Schema Recs** | AI-driven index and schema improvement recommendations |
 
-#### 📝 Schema Management
-- **Schema Upload**: Import schema from SQL, JSON, or image files
-- **Schema Generator**: Create sample schemas with AI assistance
-- **Schema Visualizer**: Auto-generate ER diagrams from database structures
-- **Template Library**: Pre-built schemas for common use cases (e-commerce, social media, etc.)
+### Conversion & Export
+- Convert SQL between dialects with side-by-side diff view
+- Export to ORM code: Prisma, TypeORM, Sequelize, Drizzle, Knex.js
+- Generate realistic mock result data from any query
 
-#### 🎨 Export Options
-Generate queries for multiple ORMs and frameworks:
-- Prisma
-- TypeORM
-- Sequelize
-- Drizzle ORM
-- Knex.js
-- Raw SQL
+### Schema Tools
+- Upload schema from SQL DDL, JSON, or an image (OCR)
+- Visual schema designer with drag-and-drop ER diagram
+- AI schema generator from a description
+- Schema drift analysis + migration generator
 
-### Advanced Features
+### Collaboration
+- Share queries via URL or encoded link
+- Inline code review on shared queries
+- Query history with bookmarking
 
-#### 📈 Performance Analysis
-- Simulated execution plan analysis
-- Index recommendations
-- Query cost estimation
-- Performance bottleneck detection
+---
 
-#### 🧪 Mock Data Generation
-- AI-generated realistic sample data based on query structure
-- Customizable data volume
-- Type-aware data generation
+## Getting Started
 
-#### 📚 Query History
-- Search and filter previous queries
-- Save favorite queries
-- Export query history
+### Prerequisites
+- Node.js 20+
+- npm 9+
 
-#### 🔗 Multi-Query Support
-- Execute multiple related queries
-- Dependency tracking
-- Transaction support
+### Local development
 
-#### 🎯 Query Sharing
-- Generate shareable links for queries
-- Embed queries in documentation
-- Export as gists
+```bash
+# 1. Clone
+git clone <repo-url>
+cd querycraft
 
-## 🛠️ Tech Stack
+# 2. Install root dependencies
+npm install
+
+# 3. Set up the backend
+cd server
+npm install
+cp .env.example .env   # then configure your AI provider — see AI Provider Setup below
+
+# 4. Run database migrations
+npx prisma migrate dev
+
+# 5. Start both servers (two terminals)
+# Terminal 1 — backend  (port 3000)
+npm run dev
+
+# Terminal 2 — frontend (port 8080, from repo root)
+cd ..
+npm run dev
+```
+
+### Docker (all-in-one)
+
+```bash
+JWT_SECRET=<random-64-char-hex> \
+docker compose up --build
+```
+
+This starts three services: `frontend` (nginx), `backend` (Express), and a local LLM. The local LLM is used by default when no cloud API key is configured. To use a cloud provider instead, pass the corresponding key as an environment variable.
+
+---
+
+## AI Provider Setup
+
+Open `server/.env` and configure one of the following options:
+
+**Option A — Local LLM (free, no rate limits)**
+
+Install a local LLM runtime, pull a model, then set `OLLAMA_MODEL` in `server/.env`.
+
+**Option B — Cloud AI provider**
+
+Set one of the API key variables in `server/.env`:
+```
+GEMINI_API_KEY=your_key
+OPENAI_API_KEY=your_key
+ANTHROPIC_API_KEY=your_key
+GROQ_API_KEY=your_key
+```
+
+The local LLM takes priority when `OLLAMA_MODEL` is set. See `server/.env.example` for the full list of options.
+
+---
+
+## Architecture
+
+```
+┌─────────────────────────────────────────────────┐
+│                  Browser (React)                │
+│  ┌──────────┐  ┌──────────┐  ┌──────────────┐  │
+│  │ Builder  │  │  Schema  │  │ Visual Query │  │
+│  │  (NL/SQL)│  │   Tab    │  │   Builder    │  │
+│  └────┬─────┘  └────┬─────┘  └──────┬───────┘  │
+│       └──────────────┴──────────────┘           │
+│                    API layer (src/lib/api.ts)    │
+└──────────────────────┬──────────────────────────┘
+                       │ HTTP / JSON
+┌──────────────────────▼──────────────────────────┐
+│              Express API (Node.js / TS)         │
+│                                                 │
+│  ┌────────────┐  ┌─────────────┐  ┌──────────┐ │
+│  │  /api/v1   │  │ /api/v1/    │  │  /api/   │ │
+│  │  core SQL  │  │  advanced   │  │  auth    │ │
+│  │  routes    │  │  routes     │  │  routes  │ │
+│  └─────┬──────┘  └──────┬──────┘  └────┬─────┘ │
+│        └────────────────┴───────────────┘       │
+│                   aiProvider.ts                 │
+│  ┌──────────────────────────────────────────┐  │
+│  │  Provider auto-selection (priority order) │  │
+│  │  Local LLM → Cloud providers             │  │
+│  │  (first configured key wins)             │  │
+│  └──────────────────────────────────────────┘  │
+│                                                 │
+│                Prisma ORM → SQLite / PostgreSQL │
+└─────────────────────────────────────────────────┘
+```
+
+### Data model (key entities)
+
+```
+User ──< QueryHistory
+     ──< SavedQuery
+     ──< DatabaseConnection
+     ──< AuditLog
+     ──< RefreshToken
+
+SharedQuery ──< QueryReview
+
+QueryVersion      (versioned SQL history, per queryName)
+QueryFingerprint  (normalized query deduplication)
+AIFeedback        (per-feature rating)
+```
+
+---
+
+## Tech Stack
 
 ### Frontend
-- **Framework**: React 18 + TypeScript
-- **Build Tool**: Vite
-- **UI Components**: Radix UI + shadcn/ui
-- **Styling**: Tailwind CSS
-- **Syntax Highlighting**: prism-react-renderer
-- **State Management**: React Query
-- **Routing**: React Router
+| Layer | Library |
+|---|---|
+| Framework | React 18 + TypeScript |
+| Build | Vite + SWC |
+| UI components | Radix UI + shadcn/ui |
+| Styling | Tailwind CSS |
+| Flow diagrams | @xyflow/react |
+| Charts | Recharts |
+| Syntax highlight | prism-react-renderer |
+| Data fetching | TanStack Query v5 |
+| Routing | React Router v6 |
+| Forms | React Hook Form + Zod |
 
 ### Backend
-- **Runtime**: Node.js + Express
-- **Language**: TypeScript
-- **Database**: Prisma ORM + SQLite
-- **AI Integration**: Multi-provider support (Gemini, OpenAI, Anthropic, Groq)
+| Layer | Library |
+|---|---|
+| Runtime | Node.js 20 + TypeScript |
+| HTTP | Express 4 |
+| ORM | Prisma (SQLite dev / PostgreSQL prod) |
+| Auth | JWT (access + refresh tokens) |
+| Logging | Pino + pino-http |
+| Security | Helmet, express-rate-limit, CORS |
+| API docs | Swagger / OpenAPI |
 
-### Deployment
-- **Frontend**: Firebase Hosting
-- **Backend**: Render
-- **CI/CD**: Firebase CLI
+### AI
+Supports a local LLM (free, no rate limits) or any major cloud AI provider via API key.
 
-## 🔧 Configuration
+---
 
-### API Endpoints
+## API Reference
 
-The backend exposes the following key endpoints:
+Base path: `/api` (also aliased at `/api/v1`)
 
-- `POST /api/generate-sql` - Generate SQL from natural language
-- `POST /api/explain-sql` - Get detailed query explanation
-- `POST /api/optimize-sql` - Optimize query performance
-- `POST /api/convert-sql` - Convert between SQL dialects
-- `POST /api/mock-results` - Generate sample data
-- `POST /api/analyze-performance` - Analyze query performance
-- `POST /api/debug-sql` - Debug SQL errors
-- `GET /api/ai-status` - Check AI provider status
+### Core SQL
 
-## 🎯 Usage Examples
+| Method | Path | Description |
+|---|---|---|
+| `POST` | `/generate-sql` | Natural language → SQL |
+| `POST` | `/explain-sql` | Explain query in plain English |
+| `POST` | `/optimize-sql` | Optimize + suggest indexes |
+| `POST` | `/convert-sql` | Convert between dialects |
+| `POST` | `/debug-sql` | Detect errors and suggest fixes |
+| `POST` | `/analyze-performance` | Execution plan simulation |
+| `POST` | `/mock-results` | Generate sample result data |
+| `POST` | `/export-orm` | Generate ORM code |
+| `POST` | `/generate-schema` | AI schema generation |
+| `POST` | `/image-to-schema` | OCR schema from an image |
+| `POST` | `/query-suggestions` | Autocomplete suggestions |
+| `POST` | `/generate-multi-sql` | Multi-query generation |
+| `POST` | `/sql-to-natural` | SQL → plain English |
+| `GET`  | `/ai-status` | Active provider info |
 
-### Generate SQL Query
+### Advanced Analysis
+
+| Method | Path | Description |
+|---|---|---|
+| `POST` | `/advanced/semantic-diff` | Semantic equivalence check |
+| `POST` | `/advanced/schema-drift` | Drift analysis vs query history |
+| `POST` | `/advanced/infer-migrations` | Generate migration DDL |
+| `POST` | `/advanced/dialect-cost` | Cross-dialect cost comparison |
+| `POST` | `/advanced/blast-radius` | Impact of schema changes |
+| `POST` | `/advanced/anomaly-detect` | Anomaly scoring vs baseline |
+| `POST` | `/advanced/schema-recommend` | Index / schema recommendations |
+| `POST` | `/advanced/fingerprint` | Normalize and deduplicate |
+| `POST` | `/advanced/compile-assertions` | Natural language → SQL CHECKs |
+| `POST` | `/advanced/budget-check` | Cost budget enforcement |
+
+### Auth
+
+| Method | Path | Description |
+|---|---|---|
+| `POST` | `/auth/register` | Create account |
+| `POST` | `/auth/login` | Get access + refresh tokens |
+| `POST` | `/auth/refresh` | Rotate refresh token |
+| `POST` | `/auth/logout` | Revoke refresh token |
+| `GET`  | `/auth/me` | Current user profile |
+| `POST` | `/auth/forgot-password` | Initiate password reset |
+| `POST` | `/auth/reset-password` | Complete password reset |
+
+### Query History & Versions
+
+| Method | Path | Description |
+|---|---|---|
+| `GET`  | `/history` | Paginated query history |
+| `POST` | `/history` | Add to history |
+| `DELETE` | `/history/:id` | Delete entry |
+| `GET`  | `/history/saved` | Saved / bookmarked queries |
+| `POST` | `/history/saved` | Save a query |
+| `PUT`  | `/history/saved/:id` | Update saved query |
+| `DELETE` | `/history/saved/:id` | Delete saved query |
+| `POST` | `/versions` | Save a query version |
+| `GET`  | `/versions/:queryName` | List versions for a query |
+| `DELETE` | `/versions/:id` | Delete a version |
+| `POST` | `/versions/diff` | Semantic changelog between two versions |
+
+Interactive API docs: `/api-docs` (Swagger UI).
+
+---
+
+## AI Accuracy Benchmark
+
+The semantic equivalence classifier ships with a 10-case ground-truth eval:
+
+```bash
+cd server
+npm run eval:semantic-diff
 ```
-Natural Language: "Find all customers who haven't ordered in the last 90 days"
 
-Generated SQL:
-SELECT c.customer_id, c.name
-FROM customers c
-LEFT JOIN orders o ON c.customer_id = o.customer_id
-WHERE o.order_date < NOW() - INTERVAL '90 days'
-   OR o.order_id IS NULL;
+Reports **Accuracy**, **Precision**, **Recall**, and **F1** against your configured provider. Cases cover: tautological WHERE, predicate commutivity, `COUNT(*)` vs `COUNT(1)`, `DISTINCT` vs `GROUP BY`, JOIN type semantics, sort direction, LIKE wildcard position, and soft-delete filters.
+
+---
+
+## Project Structure
+
+```
+querycraft/
+├── src/                    # React frontend
+│   ├── components/         # All feature components
+│   │   ├── ui/             # shadcn/ui primitives
+│   │   ├── PerformanceAnalyzer.tsx
+│   │   ├── SQLDebugger.tsx
+│   │   ├── VisualQueryBuilder.tsx
+│   │   └── ...
+│   ├── pages/
+│   │   └── Builder.tsx     # Main app page
+│   ├── context/            # Auth + Schema context
+│   └── lib/
+│       ├── api.ts          # API client
+│       └── queryManager.ts # Local history helpers
+├── server/
+│   ├── src/
+│   │   ├── index.ts        # Express app + all core routes
+│   │   ├── aiProvider.ts   # Multi-provider AI abstraction
+│   │   └── routes/         # Feature-specific routers
+│   │       ├── advanced.ts # 10 advanced analysis endpoints
+│   │       ├── auth.ts
+│   │       ├── history.ts
+│   │       ├── versions.ts
+│   │       └── reviews.ts
+│   ├── prisma/
+│   │   └── schema.prisma   # DB schema
+│   └── scripts/
+│       └── eval-semantic-diff.ts
+├── docker-compose.yml
+├── Dockerfile              # Frontend (nginx)
+└── server/Dockerfile       # Backend
 ```
 
-### Convert SQL Dialect
-```
-From PostgreSQL:
-SELECT * FROM users WHERE created_at > NOW() - INTERVAL '7 days';
+---
 
-To MySQL:
-SELECT * FROM users WHERE created_at > NOW() - INTERVAL 7 DAY;
-```
+## License
 
-### Optimize Query
-```
-Original:
-SELECT * FROM orders WHERE user_id IN (SELECT id FROM users);
-
-Optimized:
-SELECT o.* FROM orders o
-WHERE EXISTS (SELECT 1 FROM users u WHERE u.id = o.user_id);
-```
-
-## 🚀 Why QueryCraft?
-
-QueryCraft bridges the gap between natural language and database queries, making SQL accessible to everyone while providing powerful tools for experienced developers. Whether you're:
-
-- **Learning SQL** - Understand how queries work with AI-powered explanations
-- **Building Applications** - Generate optimized queries quickly with multi-ORM export
-- **Optimizing Performance** - Get AI-driven insights on query improvements
-- **Working Across Databases** - Seamlessly convert between different SQL dialects
-- **Documenting Systems** - Visualize schemas and share queries with your team
-
-QueryCraft accelerates your workflow while helping you write better, faster SQL.
-
-
+MIT

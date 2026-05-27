@@ -128,3 +128,37 @@ model QueryReview {
 
   @@index([shareId])
 }
+
+model AIFeedback {
+  id           String   @id @default(uuid())
+  feature      String
+  rating       Int
+  inputSummary String?
+  outputSummary String?
+  createdAt    DateTime @default(now())
+
+  @@index([feature, createdAt(sort: Desc)])
+}
+
+model QueryVersion {
+  id        String   @id @default(uuid())
+  queryName String
+  sql       String
+  note      String?
+  version   Int
+  userId    String?
+  createdAt DateTime @default(now())
+
+  @@index([queryName, createdAt(sort: Desc)])
+}
+
+model QueryFingerprint {
+  id            String   @id @default(uuid())
+  fingerprint   String   @unique
+  sql           String
+  normalizedSql String
+  tables        String
+  createdAt     DateTime @default(now())
+
+  @@index([fingerprint])
+}

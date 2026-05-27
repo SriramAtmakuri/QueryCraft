@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -42,11 +42,7 @@ export const QueryReviewer = ({ shareId, sql, onClose }: QueryReviewerProps) => 
 
   const lines = sql.split('\n');
 
-  // fetchReviews is defined below; stable reference via function hoisting isn't available
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(() => { fetchReviews(); }, [shareId]);
-
-  const fetchReviews = async () => {
+  const fetchReviews = useCallback(async () => {
     setIsLoading(true);
     try {
       const data = await api.getReviews(shareId);
@@ -56,7 +52,26 @@ export const QueryReviewer = ({ shareId, sql, onClose }: QueryReviewerProps) => 
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [shareId]);
+
+  useEffect(() => {
+    fetchReviews();
+
+    const API_BASE = import.meta.env.VITE_API_URL || 'https://querycraft-uaqy.onrender.com';
+    const es = new EventSource(`${API_BASE}/api/reviews/${shareId}/stream`);
+
+    es.onmessage = (e) => {
+      if (!e.data || e.data.startsWith(':')) return;
+      try {
+        const review: ReviewComment = JSON.parse(e.data);
+        setReviews(prev => prev.some(r => r.id === review.id) ? prev : [...prev, review]);
+      } catch { /* ignore malformed */ }
+    };
+
+    es.onerror = () => es.close();
+
+    return () => es.close();
+  }, [shareId, fetchReviews]);
 
   const getLineReviews = (lineNum: number) =>
     reviews.filter(r => lineNum >= r.lineStart && lineNum <= r.lineEnd);

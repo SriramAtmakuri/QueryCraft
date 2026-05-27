@@ -1,4 +1,4 @@
-import { Router } from 'express';
+import { Router, Response } from 'express';
 import { z } from 'zod';
 import { PrismaClient } from '@prisma/client';
 import { validate } from '../middleware/validate';
@@ -6,6 +6,47 @@ import { AppError } from '../middleware/errorHandler';
 
 const router = Router();
 const prisma = new PrismaClient();
+
+// SSE subscribers keyed by shareId
+const sseClients = new Map<string, Set<Response>>();
+
+function broadcastReview(shareId: string, review: unknown) {
+  const clients = sseClients.get(shareId);
+  if (!clients) return;
+  const data = `data: ${JSON.stringify(review)}\n\n`;
+  for (const res of clients) {
+    try { res.write(data); } catch { clients.delete(res); }
+  }
+}
+
+// SSE stream for real-time review updates
+router.get('/:shareId/stream', async (req, res, next) => {
+  try {
+    const shared = await prisma.sharedQuery.findUnique({ where: { id: req.params.shareId } });
+    if (!shared) throw new AppError(404, 'Shared query not found');
+
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    res.setHeader('X-Accel-Buffering', 'no');
+    res.flushHeaders();
+
+    res.write(`: connected\n\n`);
+
+    const { shareId } = req.params;
+    if (!sseClients.has(shareId)) sseClients.set(shareId, new Set());
+    sseClients.get(shareId)!.add(res);
+
+    const keepAlive = setInterval(() => {
+      try { res.write(`: ping\n\n`); } catch { clearInterval(keepAlive); }
+    }, 25000);
+
+    req.on('close', () => {
+      clearInterval(keepAlive);
+      sseClients.get(shareId)?.delete(res);
+    });
+  } catch (err) { next(err); }
+});
 
 const createShareSchema = z.object({
   query: z.string().max(5000).optional(),
@@ -77,6 +118,7 @@ router.post('/:shareId', validate(addCommentSchema), async (req, res, next) => {
         shareId: req.params.shareId,
       },
     });
+    broadcastReview(req.params.shareId, review);
     res.status(201).json(review);
   } catch (err: unknown) {
     next(err);

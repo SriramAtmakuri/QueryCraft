@@ -5,7 +5,7 @@ import { Card } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Sparkles, Play, Copy, Download, Database as DatabaseIcon, RefreshCw, MessageSquare, Zap, ArrowRightLeft, Table as TableIcon, FileCode, Wand2, GitCompare, MoreHorizontal, Bug, Activity, Layers, FileDown, DollarSign, GitMerge, AlertTriangle } from "lucide-react";
+import { Sparkles, Play, Copy, Download, Database as DatabaseIcon, RefreshCw, MessageSquare, Zap, ArrowRightLeft, Table as TableIcon, FileCode, Wand2, GitCompare, MoreHorizontal, Bug, Activity, Layers, FileDown, DollarSign, GitMerge, AlertTriangle, History, Shield, Search, Bomb, PiggyBank, FileClock, TrendingDown, Cpu } from "lucide-react";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -30,12 +30,20 @@ import { api } from "@/lib/api";
 import { useSchema } from "@/context/SchemaContext";
 import { useAuth } from "@/context/AuthContext";
 import { useSearchParams } from "react-router-dom";
-import { addToHistory, formatSQL } from "@/lib/queryManager";
+import { addToHistory, formatSQL, getQueryHistory } from "@/lib/queryManager";
 import { exportToCSV, exportToJSON, exportSQLToFile } from "@/lib/export";
 import { SchemaDriftAnalyzer } from "@/components/SchemaDriftAnalyzer";
 import { MigrationGenerator } from "@/components/MigrationGenerator";
 import { DialectCostEstimator } from "@/components/DialectCostEstimator";
 import { QueryReviewModal } from "@/components/QueryReviewer";
+import { BlastRadiusAnalyzer } from "@/components/BlastRadiusAnalyzer";
+import { AnomalyDetector } from "@/components/AnomalyDetector";
+import { SchemaRecommendations } from "@/components/SchemaRecommendations";
+import { QueryFingerprinter } from "@/components/QueryFingerprinter";
+import { AssertionTester } from "@/components/AssertionTester";
+import { QueryBudgetEnforcer } from "@/components/QueryBudgetEnforcer";
+import { QueryTimeMachine } from "@/components/QueryTimeMachine";
+import { QueryChangelog } from "@/components/QueryChangelog";
 
 const Builder = () => {
   const [searchParams] = useSearchParams();
@@ -72,9 +80,25 @@ const Builder = () => {
   const [multiQueryMode, setMultiQueryMode] = useState(false);
   const [multiQueries, setMultiQueries] = useState<{ description: string; sql: string; order: number; dependencies: number[] }[]>([]);
   const [expandedSection, setExpandedSection] = useState<{ title: string; explanation: string; columns?: string[] } | null>(null);
+  const [sqlHistory, setSqlHistory] = useState<string[]>([]);
 
   const { schemaText, setSchemaText } = useSchema();
   const { token } = useAuth();
+
+  // Load SQL history for anomaly detection and blast radius analysis
+  useEffect(() => {
+    const local = getQueryHistory().map(h => h.sql).filter(Boolean);
+    setSqlHistory(local);
+    if (token) {
+      api.getHistory(1, 100).then((data: { history: { sql: string }[] }) => {
+        const remote = data.history?.map((h: { sql: string }) => h.sql).filter(Boolean) ?? [];
+        setSqlHistory(prev => {
+          const merged = [...new Set([...remote, ...prev])].slice(0, 200);
+          return merged;
+        });
+      }).catch(() => {});
+    }
+  }, [token]);
 
   // Handle URL tab parameter and shared queries
   useEffect(() => {
@@ -195,7 +219,6 @@ const Builder = () => {
     setIsExplaining(true);
     try {
       const result = await api.explainSQL(generatedSQL);
-      // Result is already structured JSON from backend
       setExplanation(result);
       toast.success("Explanation generated!");
     } catch (error) {
@@ -232,7 +255,6 @@ const Builder = () => {
     setIsOptimizing(true);
     try {
       const result = await api.optimizeSQL(generatedSQL, schemaText);
-      // Result is already structured JSON from backend
       setOptimization(result);
       toast.success("Optimization analysis complete!");
     } catch (error) {
@@ -302,7 +324,6 @@ const Builder = () => {
   return (
     <div className="min-h-screen bg-background">
       <Header />
-
       <div className="container mx-auto px-4 py-6">
         <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
           <div className="flex items-center justify-between mb-6">
@@ -316,7 +337,6 @@ const Builder = () => {
 
           <TabsContent value="natural" className="mt-0">
             <div className="grid lg:grid-cols-2 gap-6">
-              {/* Input Section */}
               <div className="space-y-4">
                 <Card className="p-6">
                   <div className="space-y-4">
@@ -427,7 +447,6 @@ const Builder = () => {
                 <SampleDataUploader />
               </div>
 
-              {/* Output Section */}
               <div className="space-y-4">
                 <Card className="p-6">
                   <Tabs value={outputTab} onValueChange={setOutputTab} className="w-full">
@@ -465,6 +484,38 @@ const Builder = () => {
                           <DropdownMenuItem onClick={() => setOutputTab("cost")}>
                             <DollarSign className="w-4 h-4 mr-2" />
                             Dialect Cost
+                          </DropdownMenuItem>
+                          <DropdownMenuItem onClick={() => setOutputTab("timemachine")}>
+                            <History className="w-4 h-4 mr-2" />
+                            Time Machine
+                          </DropdownMenuItem>
+                          <DropdownMenuItem onClick={() => setOutputTab("changelog")}>
+                            <FileClock className="w-4 h-4 mr-2" />
+                            Query Changelog
+                          </DropdownMenuItem>
+                          <DropdownMenuItem onClick={() => setOutputTab("assertions")}>
+                            <Shield className="w-4 h-4 mr-2" />
+                            Assertion Tester
+                          </DropdownMenuItem>
+                          <DropdownMenuItem onClick={() => setOutputTab("fingerprint")}>
+                            <Search className="w-4 h-4 mr-2" />
+                            Fingerprint
+                          </DropdownMenuItem>
+                          <DropdownMenuItem onClick={() => setOutputTab("blast")}>
+                            <Bomb className="w-4 h-4 mr-2" />
+                            Blast Radius
+                          </DropdownMenuItem>
+                          <DropdownMenuItem onClick={() => setOutputTab("budget")}>
+                            <PiggyBank className="w-4 h-4 mr-2" />
+                            Budget Enforcer
+                          </DropdownMenuItem>
+                          <DropdownMenuItem onClick={() => setOutputTab("anomaly")}>
+                            <TrendingDown className="w-4 h-4 mr-2" />
+                            Anomaly Detect
+                          </DropdownMenuItem>
+                          <DropdownMenuItem onClick={() => setOutputTab("schemrec")}>
+                            <Cpu className="w-4 h-4 mr-2" />
+                            Schema Recs
                           </DropdownMenuItem>
                         </DropdownMenuContent>
                       </DropdownMenu>
@@ -533,7 +584,6 @@ const Builder = () => {
                         )}
                       </div>
 
-                      {/* Multi-Query Panel */}
                       {multiQueries.length > 0 && (
                         <MultiQueryPanel
                           queries={multiQueries}
@@ -547,7 +597,6 @@ const Builder = () => {
                         />
                       )}
 
-                      {/* SQL Linting */}
                       {generatedSQL && (
                         <Card className="p-3">
                           <h3 className="text-sm font-semibold mb-2">SQL Analysis</h3>
@@ -667,7 +716,6 @@ const Builder = () => {
                       <div className="min-h-[300px] overflow-auto">
                         {explanation ? (
                           <div className="space-y-4">
-                            {/* Summary */}
                             {explanation.summary && (
                               <Card className="p-4 border-primary/30">
                                 <h4 className="text-sm font-semibold mb-2">Summary</h4>
@@ -675,7 +723,6 @@ const Builder = () => {
                               </Card>
                             )}
 
-                            {/* Sections */}
                             {explanation.sections && explanation.sections.length > 0 && (
                               <div className="space-y-3">
                                 {explanation.sections.map((section, idx) => (
@@ -708,7 +755,6 @@ const Builder = () => {
                               </div>
                             )}
 
-                            {/* Result */}
                             {explanation.result && (
                               <Card className="p-4">
                                 <h4 className="text-sm font-semibold mb-2">Expected Result</h4>
@@ -716,7 +762,6 @@ const Builder = () => {
                               </Card>
                             )}
 
-                            {/* Tips */}
                             {explanation.tips && explanation.tips.length > 0 && (
                               <Card className="p-4 border-yellow-500/30">
                                 <h4 className="text-sm font-semibold mb-2">Tips</h4>
@@ -773,7 +818,6 @@ const Builder = () => {
                       <div className="min-h-[300px] overflow-auto">
                         {optimization ? (
                           <div className="space-y-4">
-                            {/* Summary */}
                             {optimization.summary && (
                               <Card className="p-4 border-primary/30">
                                 <h4 className="text-sm font-semibold mb-2">Summary</h4>
@@ -781,7 +825,6 @@ const Builder = () => {
                               </Card>
                             )}
 
-                            {/* Optimized Query */}
                             {optimization.optimizedQuery && (
                               <Card className="p-4">
                                 <div className="flex items-center justify-between mb-3">
@@ -812,7 +855,6 @@ const Builder = () => {
                               </Card>
                             )}
 
-                            {/* Improvements */}
                             {optimization.improvements && optimization.improvements.length > 0 && (
                               <Card className="p-4">
                                 <h4 className="text-sm font-semibold mb-3">Improvements</h4>
@@ -833,7 +875,6 @@ const Builder = () => {
                               </Card>
                             )}
 
-                            {/* Suggested Indexes */}
                             {optimization.indexes && optimization.indexes.length > 0 && (
                               <Card className="p-4">
                                 <h4 className="text-sm font-semibold mb-3">Suggested Indexes</h4>
@@ -849,7 +890,6 @@ const Builder = () => {
                               </Card>
                             )}
 
-                            {/* Tips */}
                             {optimization.tips && optimization.tips.length > 0 && (
                               <Card className="p-4 border-yellow-500/30">
                                 <h4 className="text-sm font-semibold mb-2">Performance Tips</h4>
@@ -998,6 +1038,38 @@ const Builder = () => {
                     <TabsContent value="cost" className="space-y-4">
                       <DialectCostEstimator sql={generatedSQL} schema={schemaText} />
                     </TabsContent>
+
+                    <TabsContent value="timemachine" className="space-y-4">
+                      <QueryTimeMachine sql={generatedSQL} dialect={dialect} />
+                    </TabsContent>
+
+                    <TabsContent value="changelog" className="space-y-4">
+                      <QueryChangelog sql={generatedSQL} dialect={dialect} />
+                    </TabsContent>
+
+                    <TabsContent value="assertions" className="space-y-4">
+                      <AssertionTester sql={generatedSQL} dialect={dialect} />
+                    </TabsContent>
+
+                    <TabsContent value="fingerprint" className="space-y-4">
+                      <QueryFingerprinter sql={generatedSQL} />
+                    </TabsContent>
+
+                    <TabsContent value="blast" className="space-y-4">
+                      <BlastRadiusAnalyzer savedQueries={sqlHistory.length > 0 ? sqlHistory : (generatedSQL ? [generatedSQL] : [])} dialect={dialect} />
+                    </TabsContent>
+
+                    <TabsContent value="budget" className="space-y-4">
+                      <QueryBudgetEnforcer sql={generatedSQL} schema={schemaText} dialect={dialect} />
+                    </TabsContent>
+
+                    <TabsContent value="anomaly" className="space-y-4">
+                      <AnomalyDetector sql={generatedSQL} queryHistory={sqlHistory.length >= 2 ? sqlHistory : (generatedSQL ? [generatedSQL, generatedSQL] : [])} dialect={dialect} />
+                    </TabsContent>
+
+                    <TabsContent value="schemrec" className="space-y-4">
+                      <SchemaRecommendations schema={schemaText} queries={sqlHistory.length > 0 ? sqlHistory : (generatedSQL ? [generatedSQL] : [])} dialect={dialect} />
+                    </TabsContent>
                   </Tabs>
                 </Card>
               </div>
@@ -1042,7 +1114,6 @@ const Builder = () => {
         </Tabs>
       </div>
 
-      {/* Expanded Section Modal */}
       <Dialog open={!!expandedSection} onOpenChange={(open) => !open && setExpandedSection(null)}>
         <DialogContent className="sm:max-w-lg">
           <DialogHeader>
